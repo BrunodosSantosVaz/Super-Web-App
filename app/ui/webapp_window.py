@@ -3,7 +3,9 @@
 This module provides the window that displays a webapp using WebKit WebView.
 """
 
+from pathlib import Path
 from typing import Optional
+import sys
 
 import gi
 
@@ -16,9 +18,11 @@ from ..core.webapp_manager import WebAppManager
 from ..data.models import WebApp, WebAppSettings
 from ..utils.i18n import gettext as _, subscribe as i18n_subscribe, unsubscribe as i18n_unsubscribe
 from ..utils.logger import get_logger
+from ..utils.xdg import APP_ID
 from ..webengine.popup_handler import PopupHandler
 from ..webengine.profile_manager import ProfileManager
 from ..webengine.webview_manager import WebViewManager
+from .system_tray import APP_INDICATOR_AVAILABLE, TrayManager
 
 logger = get_logger(__name__)
 
@@ -51,6 +55,7 @@ class WebAppWindow(Adw.ApplicationWindow):
         self.settings = settings
         self.webapp_manager = webapp_manager
         self.profile_manager = profile_manager
+        self.tray_manager = TrayManager() if APP_INDICATOR_AVAILABLE else None
 
         # Set window properties
         self.set_title(webapp.name)
@@ -62,6 +67,7 @@ class WebAppWindow(Adw.ApplicationWindow):
 
         self._build_ui()
         self._load_webapp()
+        self._init_tray_icon()
 
         # Connect close signal to save window state
         self.connect("close-request", self._on_close_request)
@@ -137,6 +143,9 @@ class WebAppWindow(Adw.ApplicationWindow):
             if page and page.get_loading():
                 page.set_title(_("webapp.tab.loading"))
 
+        if self.tray_manager:
+            self.tray_manager.refresh_labels(_("tray.open"), _("tray.quit"))
+
     def _load_webapp(self) -> None:
         """Load the webapp URL in WebView."""
         # Create WebView manager
@@ -176,6 +185,40 @@ class WebAppWindow(Adw.ApplicationWindow):
         webview.load_uri(self.webapp.url)
 
         logger.debug(f"Loading URL: {self.webapp.url}")
+
+    def _init_tray_icon(self) -> None:
+        """Create tray icon if the platform supports it and setting enabled."""
+        if not self.tray_manager or not self.settings.show_tray:
+            return
+
+        icon_path: Optional[str] = None
+        if self.webapp.icon_path and Path(self.webapp.icon_path).exists():
+            icon_path = self.webapp.icon_path
+
+        open_cmd = [
+            sys.executable,
+            "-m",
+            "app.main",
+            "--webapp",
+            self.webapp.id,
+            "--show-main-window",
+        ]
+        quit_cmd = [
+            sys.executable,
+            "-m",
+            "app.main",
+            "--quit",
+        ]
+
+        self.tray_manager.ensure_icon(
+            app_id=f"{APP_ID}.{self.webapp.id}",
+            title=self.webapp.name,
+            icon_path=icon_path,
+            open_label=_("tray.open"),
+            quit_label=_("tray.quit"),
+            open_cmd=open_cmd,
+            quit_cmd=quit_cmd,
+        )
 
     def _on_new_tab(self, webview: WebKit.WebView, uri: str) -> None:
         """Handle new tab request.
@@ -288,3 +331,5 @@ class WebAppWindow(Adw.ApplicationWindow):
         """Clean up translation subscription."""
         if hasattr(self, "_language_subscription") and self._language_subscription:
             i18n_unsubscribe(self._language_subscription)
+        if self.tray_manager:
+            self.tray_manager.destroy()

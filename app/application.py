@@ -37,6 +37,7 @@ class _CLIOptions:
     new_window: bool = False
     show_preferences: bool = False
     show_main_window: bool = False
+    quit: bool = False
 
 
 class WebAppsApplication(Adw.Application):
@@ -195,6 +196,11 @@ class WebAppsApplication(Adw.Application):
         argv = list(command_line.get_arguments())[1:]
         cli_options = self._parse_command_line_args(argv)
 
+        if cli_options.quit:
+            logger.info("Quit flag received via command line")
+            self.quit()
+            return 0
+
         if cli_options.webapp_id and not cli_options.show_main_window:
             self._suppress_main_window = True
             self._cli_launch_requested = True
@@ -232,6 +238,7 @@ class WebAppsApplication(Adw.Application):
         parser.add_argument("--new-window", action="store_true")
         parser.add_argument("--preferences", action="store_true")
         parser.add_argument("--show-main-window", action="store_true")
+        parser.add_argument("--quit", action="store_true")
 
         try:
             namespace, _ = parser.parse_known_args(args)
@@ -244,6 +251,7 @@ class WebAppsApplication(Adw.Application):
             new_window=namespace.new_window,
             show_preferences=namespace.preferences,
             show_main_window=namespace.show_main_window,
+            quit=namespace.quit,
         )
 
     def _launch_webapp_from_cli(self, webapp_id: str, new_window: bool) -> bool:
