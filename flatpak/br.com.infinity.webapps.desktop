@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=WebApps Manager
+GenericName=WebApp Manager
+Comment=Transform websites into native desktop applications
+Exec=webapps-manager
+Icon=br.com.infinity.webapps
+Terminal=false
+Categories=Network;WebBrowser;System;
+Keywords=webapp;browser;internet;web;application;
+StartupNotify=true
+StartupWMClass=br.com.infinity.webapps

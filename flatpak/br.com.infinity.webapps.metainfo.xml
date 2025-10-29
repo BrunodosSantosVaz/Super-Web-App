@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>br.com.infinity.webapps</id>
+
+  <name>WebApps Manager</name>
+  <summary>Transform websites into native desktop applications</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <description>
+    <p>
+      WebApps Manager allows you to run your favorite websites as standalone
+      desktop applications with full desktop integration. Each webapp runs in
+      its own isolated profile, ensuring privacy and security.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Create webapps from any website</li>
+      <li>Isolated profiles for each webapp (cookies, cache, storage)</li>
+      <li>Desktop launcher integration</li>
+      <li>System tray support</li>
+      <li>Native notifications</li>
+      <li>Multiple tabs support</li>
+      <li>Automatic icon fetching</li>
+      <li>Run in background option</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">br.com.infinity.webapps.desktop</launchable>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Main window showing list of webapps</caption>
+    </screenshot>
+  </screenshots>
+
+  <url type="homepage">https://github.com/yourusername/webapps-manager</url>
+  <url type="bugtracker">https://github.com/yourusername/webapps-manager/issues</url>
+
+  <developer_name>Bruno Vaz</developer_name>
+
+  <releases>
+    <release version="1.0.0" date="2025-01-15">
+      <description>
+        <p>Initial release</p>
+        <ul>
+          <li>Create and manage webapps</li>
+          <li>Isolated profiles</li>
+          <li>Desktop integration</li>
+          <li>System tray support</li>
+          <li>Native notifications</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1" />
+
+  <categories>
+    <category>Network</category>
+    <category>WebBrowser</category>
+  </categories>
+
+  <keywords>
+    <keyword>webapp</keyword>
+    <keyword>browser</keyword>
+    <keyword>internet</keyword>
+    <keyword>web</keyword>
+    <keyword>application</keyword>
+  </keywords>
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+  </recommends>
+
+</component>

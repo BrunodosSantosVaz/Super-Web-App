@@ -1,0 +1,69 @@
+app-id: br.com.infinity.webapps
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+command: webapps-manager
+
+finish-args:
+  # Display
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+
+  # Network access
+  - --share=network
+
+  # Audio/Video (for WebRTC)
+  - --socket=pulseaudio
+  - --device=all
+
+  # Portals
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --talk-name=org.freedesktop.portal.Background
+  - --talk-name=org.freedesktop.portal.Notification
+
+  # Filesystem access
+  - --filesystem=xdg-download
+  - --persist=.local/share/br.com.infinity.webapps
+  - --persist=.config/br.com.infinity.webapps
+
+  # DBus (for system tray)
+  - --own-name=org.kde.StatusNotifierItem-*
+
+modules:
+  # Python dependencies
+  - name: python-dependencies
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-build-isolation --prefix=/app requests beautifulsoup4 Pillow validators
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/70/8e/0e2d847013cb52cd35b38c009bb167a1a26b2ce6cd6965bf26b47bc0bf44/requests-2.31.0-py3-none-any.whl
+        sha256: 58cd2187c01e70e6e26505bca751777aa9f2ee0b7f4300988b709f44e013003f
+
+      - type: file
+        url: https://files.pythonhosted.org/packages/b1/fe/e8c672695b37eecc5cbf43e1d0638d88d66ba3a44c4d321c796f4e59167f/beautifulsoup4-4.12.3-py3-none-any.whl
+        sha256: b80878c9f40111313e55da8ba20bdba06d8fa3969fc68304167741bbf9e082ed
+
+      - type: file
+        url: https://files.pythonhosted.org/packages/3f/46/e38cf6a31c58715813a2e3401f3b19676573e1b15e8061ad5bcfddb4a09a/soupsieve-2.5-py3-none-any.whl
+        sha256: eaa337ff55a1579b6549dc679565eac1e3d000563bcb1c8ab0d0fefbc0c2cdc7
+
+      - type: file
+        url: https://files.pythonhosted.org/packages/00/d5/0b22fe35c60e0e4b91e869a73c1eef8d35c1c1e2e7d4da6d4db5a8c5a56a/Pillow-10.3.0.tar.gz
+        sha256: 9d2455fbf44c914840c793e89aa82d0e1763a14253a000743719ae5946814b2d
+
+      - type: file
+        url: https://files.pythonhosted.org/packages/3e/da/cf4c229092aaa9c9dcf026caee92d4e17c9ba1b14b8e0b11ea04181f3110/validators-0.22.0-py3-none-any.whl
+        sha256: 61cf7d4a62bbae559f2e54aed3b000ce9fdbabbbb53e08ed0c83278176dfc4e0
+
+  # Main application
+  - name: webapps-manager
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-build-isolation --prefix=/app .
+    sources:
+      - type: dir
+        path: ..
