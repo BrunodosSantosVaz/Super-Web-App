@@ -12,6 +12,13 @@ O WebApps Manager é um aplicativo GTK4/libadwaita escrito em Python 3 que trans
 ## Funcionalidades disponíveis
 
 - Criação, edição e exclusão de webapps com validação de URL, categorias predefinidas e suporte a ícones personalizados ou baixados automaticamente (`app/ui/add_dialog.py`:52).
+- **Sistema de abas dinâmicas** integrado à barra de título, com comportamento idêntico a navegadores modernos (`app/ui/tab_manager.py`):
+  - Até 10 abas simultâneas por webapp com redimensionamento automático e proporcional
+  - Abas integradas na barra de título (entre botões de navegação e controles da janela)
+  - Títulos dinâmicos que refletem mudanças do `document.title` em tempo real
+  - Botão "+" para criar novas abas e botão "X" para fechar abas individuais
+  - Sempre mantém pelo menos uma aba aberta (cria nova automaticamente ao fechar a última)
+  - Mensagens multilíngues ao atingir o limite de abas (PT/EN)
 - Perfis totalmente isolados por webapp, com diretórios próprios e `WebKit.NetworkSession` dedicado (`app/webengine/profile_manager.py`:48).
 - Execução de cada webapp em processo separado via `app.standalone_webapp`, incluindo registro de PID e integração com a linha de comando (`app/standalone_webapp.py`:21).
 - Integração com o desktop: geração de arquivos `.desktop`, scripts de lançamento e instalação dos ícones dimensionados (48/64/128px) (`app/core/desktop_integration.py`:19).
@@ -84,9 +91,16 @@ python -m app.main --webapp <id-do-webapp>
 O documento técnico (`plano.txt`) prevê recursos que ainda não foram implementados e permanecem planejados para versões futuras:
 
 - **Gerenciamento granular de notificações**: `NotificationManager` está desenhado, porém a interface de aprovação e a integração com WebKit ainda não estão conectadas (atualmente permissões são negadas por padrão) (`app/webengine/webview_manager.py`:198).
-- **Persistência de sessão/abas e execução em segundo plano**: classes e campos estão modelados (`app/data/models.py`:99), mas a restauração automática das abas e o uso do sinalizador `run_background` ainda não foram concluídos.
+- **Persistência de abas entre sessões**: o sistema de abas dinâmicas está implementado e funcional, mas a restauração automática das abas ao reabrir o webapp ainda não foi concluída.
+- **Execução em segundo plano**: o campo `run_background` está modelado (`app/data/models.py`), mas o comportamento ainda não está implementado.
 - **Manipulação aprimorada de downloads**: o hook existe na camada WebKit, porém falta UI/fluxo para acompanhar progresso e destino (`app/webengine/webview_manager.py`:214).
 - **Suite de testes automatizados e pipeline CI/CD**: o diretório `tests/` está vazio; as metas de cobertura >80% e validações contínuas ainda não foram iniciadas.
+- **Melhorias planejadas para o sistema de abas**:
+  - Atalhos de teclado (Ctrl+T para nova aba, Ctrl+W para fechar, Ctrl+Tab para alternar)
+  - Arrastar e soltar para reordenar abas
+  - Favicon nas abas (atualização dinâmica via `notify::favicon`)
+  - Menu de contexto (clique direito: fechar, fechar outras, recarregar)
+  - Busca em abas (pesquisar conteúdo em todas as abas abertas)
 - **Funcionalidades planejadas para versões futuras** (seções 23-24 do plano):
   - v1.5: user-scripts com injeção de JS, bloqueio básico de anúncios, temas customizados e gestos de trackpad.
   - v2.0: sincronização entre dispositivos, backup/restauração de configurações, sistema de plugins/extensões e suporte completo a PWAs.

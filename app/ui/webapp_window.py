@@ -24,6 +24,7 @@ from ..webengine.popup_handler import PopupHandler
 from ..webengine.profile_manager import ProfileManager
 from ..webengine.webview_manager import WebViewManager
 from .system_tray import APP_INDICATOR_AVAILABLE, TrayManager
+from .tab_manager import TabManager
 
 logger = get_logger(__name__)
 
@@ -60,6 +61,7 @@ class WebAppWindow(Adw.ApplicationWindow):
         self._on_window_closed = on_window_closed
         self.tray_manager = TrayManager() if APP_INDICATOR_AVAILABLE else None
         self._app_instance_id = build_app_instance_id(webapp.id)
+        self.tab_manager = None  # Will be initialized if tabs are enabled
 
         # Set window properties
         self.set_title(webapp.name)
@@ -154,8 +156,9 @@ class WebAppWindow(Adw.ApplicationWindow):
         self.forward_button = forward_button
         self.reload_button = reload_button
 
-        # Main content box
-        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        # Toolbar view
+        toolbar_view = Adw.ToolbarView()
+        toolbar_view.add_top_bar(header_bar)
 
         # Tab view (if tabs are enabled)
         if self.settings.allow_tabs:
@@ -163,17 +166,34 @@ class WebAppWindow(Adw.ApplicationWindow):
             self.tab_view.set_vexpand(True)
 
             # Tab bar
-            tab_bar = Adw.TabBar()
-            tab_bar.set_view(self.tab_view)
-            content_box.append(tab_bar)
-            content_box.append(self.tab_view)
+            self.tab_bar = Adw.TabBar()
+            self.tab_bar.set_view(self.tab_view)
+            self.tab_bar.set_autohide(False)  # Always show tab bar, even with 1 tab
+            self.tab_bar.set_expand_tabs(True)  # Expand tabs to fill available space
+
+            # Add "New Tab" button to the end of tab bar
+            new_tab_button = Gtk.Button()
+            new_tab_button.set_icon_name("tab-new-symbolic")
+            new_tab_button.set_tooltip_text("")  # Will be set by translations
+            new_tab_button.connect("clicked", self._on_new_tab_clicked)
+            new_tab_button.add_css_class("flat")
+            self.tab_bar.set_end_action_widget(new_tab_button)
+
+            # Store button for later use
+            self.new_tab_button = new_tab_button
+
+            # Put TabBar in the center of HeaderBar (replaces title)
+            header_bar.set_title_widget(self.tab_bar)
+
+            # Set TabView as content
+            toolbar_view.set_content(self.tab_view)
         else:
             self.tab_view = None
+            self.tab_bar = None
+            self.new_tab_button = None
 
-        # Toolbar view
-        toolbar_view = Adw.ToolbarView()
-        toolbar_view.add_top_bar(header_bar)
-        toolbar_view.set_content(content_box)
+            # No tabs - content will be set later when WebView is created
+            pass
 
         self.set_content(toolbar_view)
 
@@ -182,6 +202,9 @@ class WebAppWindow(Adw.ApplicationWindow):
         self.back_button.set_tooltip_text(_("webapp.back.tooltip"))
         self.forward_button.set_tooltip_text(_("webapp.forward.tooltip"))
         self.reload_button.set_tooltip_text(_("webapp.reload.tooltip"))
+
+        if self.new_tab_button:
+            self.new_tab_button.set_tooltip_text(_("webapp.tab.new_tooltip"))
 
         if self.tab_view:
             page = self.tab_view.get_selected_page()
@@ -196,40 +219,66 @@ class WebAppWindow(Adw.ApplicationWindow):
         # Create WebView manager
         webview_manager = WebViewManager(self.profile_manager)
 
-        # Setup popup handler
-        popup_handler = PopupHandler(
-            settings=self.settings,
-            on_new_tab=self._on_new_tab if self.settings.allow_tabs else None,
-            on_new_window=self._on_new_window if self.settings.allow_popups else None,
-        )
-
-        # Create WebView
-        webview = webview_manager.create_webview_with_popup_handler(
-            self.webapp.id, self.settings, popup_handler
-        )
-
-        # Connect navigation signals
-        webview.connect("notify::uri", self._on_uri_changed)
-        webview.connect("notify::title", self._on_title_changed)
-        webview.connect("load-changed", self._on_load_changed)
-
-        # Store webview
-        self.webview = webview
-
         if self.settings.allow_tabs:
-            # Add as first tab
-            page = self.tab_view.append(webview)
-            page.set_title(self.webapp.name)
-            page.set_loading(True)
+            # Setup popup handler for tabs
+            popup_handler = PopupHandler(
+                settings=self.settings,
+                on_new_tab=self._on_popup_new_tab,
+                on_new_window=self._on_new_window if self.settings.allow_popups else None,
+            )
+
+            # Create TabManager
+            self.tab_manager = TabManager(
+                tab_view=self.tab_view,
+                tab_bar=self.tab_bar,
+                webapp=self.webapp,
+                settings=self.settings,
+                profile_manager=self.profile_manager,
+                webview_manager=webview_manager,
+                popup_handler=popup_handler,
+                on_title_changed_callback=self._on_title_changed,
+                on_load_changed_callback=self._on_load_changed,
+            )
+
+            # Create first tab
+            page = self.tab_manager.create_new_tab(self.webapp.url)
+            if page:
+                # Get the webview from the tab manager
+                self.webview = self.tab_manager.get_active_webview()
+            else:
+                logger.error("Failed to create initial tab")
+
+            logger.debug(f"Loaded webapp with tabs: {self.webapp.url}")
+
         else:
+            # Setup popup handler without tabs
+            popup_handler = PopupHandler(
+                settings=self.settings,
+                on_new_tab=None,
+                on_new_window=self._on_new_window if self.settings.allow_popups else None,
+            )
+
+            # Create single WebView
+            webview = webview_manager.create_webview_with_popup_handler(
+                self.webapp.id, self.settings, popup_handler
+            )
+
+            # Connect navigation signals
+            webview.connect("notify::uri", self._on_uri_changed)
+            webview.connect("notify::title", self._on_title_changed)
+            webview.connect("load-changed", self._on_load_changed)
+
+            # Store webview
+            self.webview = webview
+
             # Add directly to content
             toolbar_view = self.get_content()
             toolbar_view.set_content(webview)
 
-        # Load initial URL
-        webview.load_uri(self.webapp.url)
+            # Load initial URL
+            webview.load_uri(self.webapp.url)
 
-        logger.debug(f"Loading URL: {self.webapp.url}")
+            logger.debug(f"Loaded webapp without tabs: {self.webapp.url}")
 
     def _init_tray_icon(self) -> bool:
         """Create tray icon if the platform supports it and setting enabled."""
@@ -279,25 +328,30 @@ class WebAppWindow(Adw.ApplicationWindow):
             force=True,
         )
 
-    def _on_new_tab(self, webview: WebKit.WebView, uri: str) -> None:
-        """Handle new tab request.
+    def _on_new_tab_clicked(self, button: Gtk.Button) -> None:
+        """Handle new tab button clicked.
 
         Args:
-            webview: New WebView
+            button: The button that was clicked
+        """
+        if self.tab_manager:
+            self.tab_manager.create_new_tab()
+            logger.debug("New tab button clicked")
+
+    def _on_popup_new_tab(self, webview: WebKit.WebView, uri: str) -> None:
+        """Handle new tab request from popup handler.
+
+        Args:
+            webview: New WebView (created by popup handler)
             uri: URI to load
         """
-        if not self.tab_view:
+        if not self.tab_manager:
             return
 
-        page = self.tab_view.append(webview)
-        page.set_title(_("webapp.tab.loading"))
-        page.set_loading(True)
-
-        # Connect signals for new tab
-        webview.connect("notify::title", self._on_title_changed)
-        webview.connect("load-changed", self._on_load_changed)
-
-        logger.debug(f"New tab created: {uri}")
+        # The popup handler already created the webview, but we need to
+        # let TabManager create and manage it properly
+        self.tab_manager.create_new_tab(uri)
+        logger.debug(f"New tab created from popup: {uri}")
 
     def _on_new_window(self, webview: WebKit.WebView, uri: str) -> None:
         """Handle new window request.
@@ -337,29 +391,38 @@ class WebAppWindow(Adw.ApplicationWindow):
     def _on_load_changed(self, webview: WebKit.WebView, load_event: WebKit.LoadEvent) -> None:
         """Handle load changed."""
         if load_event == WebKit.LoadEvent.FINISHED:
-            # Update navigation buttons
-            self.back_button.set_sensitive(webview.can_go_back())
-            self.forward_button.set_sensitive(webview.can_go_forward())
+            # Update navigation buttons for active webview
+            active_webview = self.tab_manager.get_active_webview() if self.tab_manager else self.webview
+            if active_webview:
+                self.back_button.set_sensitive(active_webview.can_go_back())
+                self.forward_button.set_sensitive(active_webview.can_go_forward())
 
-            # Update tab loading state
-            if self.tab_view:
+            # Update tab loading state (handled by TabManager if tabs enabled)
+            if not self.tab_manager and self.tab_view:
                 page = self.tab_view.get_page(webview)
                 if page:
                     page.set_loading(False)
 
     def _on_back_clicked(self, button: Gtk.Button) -> None:
         """Handle back button clicked."""
-        if self.webview.can_go_back():
-            self.webview.go_back()
+        # Get active webview (from tab manager if tabs enabled)
+        webview = self.tab_manager.get_active_webview() if self.tab_manager else self.webview
+        if webview and webview.can_go_back():
+            webview.go_back()
 
     def _on_forward_clicked(self, button: Gtk.Button) -> None:
         """Handle forward button clicked."""
-        if self.webview.can_go_forward():
-            self.webview.go_forward()
+        # Get active webview (from tab manager if tabs enabled)
+        webview = self.tab_manager.get_active_webview() if self.tab_manager else self.webview
+        if webview and webview.can_go_forward():
+            webview.go_forward()
 
     def _on_reload_clicked(self, button: Gtk.Button) -> None:
         """Handle reload button clicked."""
-        self.webview.reload()
+        # Get active webview (from tab manager if tabs enabled)
+        webview = self.tab_manager.get_active_webview() if self.tab_manager else self.webview
+        if webview:
+            webview.reload()
 
     def _on_close_request(self, _window: Gtk.Window) -> bool:
         """Handle window close request.
@@ -394,6 +457,8 @@ class WebAppWindow(Adw.ApplicationWindow):
         """Clean up translation subscription."""
         if hasattr(self, "_language_subscription") and self._language_subscription:
             i18n_unsubscribe(self._language_subscription)
+        if self.tab_manager:
+            self.tab_manager.cleanup()
         if self.tray_manager:
             self.tray_manager.destroy()
         if self._on_window_closed:
