@@ -3,283 +3,93 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
 
-Transform your favorite websites into native desktop applications with full isolation and desktop integration.
+Gerencie seus sites favoritos como aplicativos desktop isolados no Linux, com integração aos padrões do ecossistema GNOME.
 
-## Features
+## Visão Geral
 
-- 🚀 **Create WebApps** from any website with just a URL
-- 🔒 **Isolated Profiles** - Each webapp has its own cookies, cache, and storage (similar to Firefox profiles)
-- 🎨 **Desktop Integration** - Automatic launcher entries and system tray support
-- 🔔 **Native Notifications** - Full control over which webapps can send notifications
-- 📑 **Multiple Tabs** - Browse multiple pages within a single webapp
-- 🎭 **Popup Handling** - Intelligent popup management (open as tabs or windows)
-- ⚡ **Resource Efficient** - Shared network process saves ~40MB per webapp
-- 🌐 **Modern UI** - Built with GTK4 and libadwaita for a native GNOME experience
+O WebApps Manager é um aplicativo GTK4/libadwaita escrito em Python 3 que transforma páginas web em aplicações independentes. Cada webapp roda em um processo separado, com perfil WebKit isolado, configurações próprias e atalhos de desktop gerados automaticamente. A aplicação principal mantém um catálogo de webapps em SQLite e oferece ferramentas para criar, editar, iniciar e remover cada entrada.
 
-## Architecture
+## Funcionalidades disponíveis
 
-WebApps Manager follows Clean Code principles with a layered architecture:
+- Criação, edição e exclusão de webapps com validação de URL, categorias predefinidas e suporte a ícones personalizados ou baixados automaticamente (`app/ui/add_dialog.py`:52).
+- Perfis totalmente isolados por webapp, com diretórios próprios e `WebKit.NetworkSession` dedicado (`app/webengine/profile_manager.py`:48).
+- Execução de cada webapp em processo separado via `app.standalone_webapp`, incluindo registro de PID e integração com a linha de comando (`app/standalone_webapp.py`:21).
+- Integração com o desktop: geração de arquivos `.desktop`, scripts de lançamento e instalação dos ícones dimensionados (48/64/128px) (`app/core/desktop_integration.py`:19).
+- Configurações por webapp para abas, popups, bandeja, permissões de notificação e zoom; idioma global com preferências dedicadas (`app/ui/preferences_dialog.py`:15).
+- Bandeja opcional implementada com AppIndicator através de um helper externo para abrir ou fechar o webapp rapidamente (`app/ui/system_tray.py`:15).
+- UI principal em libadwaita com busca em tempo real, ações para lançar/editar/remover e suporte a atalhos (`app/ui/main_window.py`:21).
+- Internacionalização simples em `pt` e `en`, com arquivo de traduções gravado em `~/.config/br.com.infinity.webapps` (`app/utils/i18n.py`:16).
+- Logger central com rotação de arquivos em diretório XDG e modo debug habilitável via parâmetro `--debug` (`app/utils/logger.py`:8, `app/main.py`:24).
+
+## Como implementamos
+
+A base segue arquitetura em camadas bem definidas:
 
 ```
 ┌─────────────────────────────────────┐
-│  UI Layer (GTK4 + libadwaita)      │
+│  UI (GTK4/libadwaita)               │  app/ui
 ├─────────────────────────────────────┤
-│  Core Layer (Business Logic)       │
+│  Core (regras de negócio)          │  app/core
 ├─────────────────────────────────────┤
-│  WebEngine Layer (WebKitGTK)       │
+│  WebEngine (WebKitGTK 6)           │  app/webengine
 ├─────────────────────────────────────┤
-│  Data Layer (SQLite + Profiles)    │
+│  Data (SQLite + perfis WebKit)     │  app/data
+├─────────────────────────────────────┤
+│  Utils (XDG, i18n, logging, etc.)  │  app/utils
 └─────────────────────────────────────┘
 ```
 
-### Key Design Decisions
+- A camada `core` coordena banco, perfis e integração com o desktop (`app/core/webapp_manager.py`:19).
+- `webengine` concentra o gerenciamento do `WebContext`, restrições de segurança, manipulação de popups e sessões (`app/webengine/webview_manager.py`:20).
+- A camada de dados usa SQLite com migrações automáticas e mapeamento via dataclasses (`app/data/database.py`:18, `app/data/models.py`:15).
+- Utilitários XDG garantem que dados, perfis e logs sejam gravados nos diretórios corretos do usuário (`app/utils/xdg.py`:13).
 
-- **Shared WebContext**: All webapps share a network process for efficiency
-- **Isolated Profiles**: Each webapp has its own WebsiteDataManager for privacy
-- **SQLite for Metadata**: Fast queries for webapp information
-- **File-based Profiles**: Easy backup and portability
-- **Type Safety**: Full type hints throughout the codebase
-- **Clean Code**: Small, focused functions with clear responsibilities
-
-## Requirements
-
-### Runtime Dependencies
+## Tecnologias
 
 - Python 3.11+
-- GTK4 4.12+
-- libadwaita 1.5+
-- WebKitGTK 6.0+
-- PyGObject 3.46+
+- GTK4 4.12+ e libadwaita 1.5+
+- WebKitGTK 6.0+ via PyGObject 3.46
+- SQLite (módulo padrão) para metadados
+- Requests + BeautifulSoup + Pillow para busca e processamento de ícones
+- AppIndicator3 (libayatana-appindicator) para a bandeja
+- Ferramentas de desenvolvimento configuradas em `pyproject.toml`: pytest, black, flake8, mypy, isort (`pyproject.toml`:35)
 
-### Optional Dependencies
+## Como executar
 
-- StatusNotifier support (for system tray)
-- xdg-desktop-portal (for background apps and notifications)
-
-## Installation
-
-### From Flatpak (Recommended)
+### Flatpak
 
 ```bash
-# Build the Flatpak
-cd webapps-manager/flatpak
+cd flatpak
 flatpak-builder --user --install --force-clean build br.com.infinity.webapps.yml
-
-# Run
 flatpak run br.com.infinity.webapps
 ```
 
-### From Source (Development)
+### Ambiente de desenvolvimento
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/webapps-manager.git
-cd webapps-manager
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e .[dev]
-
-# Run
-python -m app.main
+python -m app.main --debug
 ```
 
-## Usage
-
-### Creating a WebApp
-
-1. Click "New WebApp" in the main window
-2. Enter a name and URL
-3. Optionally fetch the website's icon automatically
-4. Configure settings (tabs, notifications, etc.)
-5. Click "Create"
-
-The webapp will appear in your application launcher and can be launched directly.
-
-### Managing WebApps
-
-- **Launch**: Click the play button or double-click the webapp
-- **Edit**: Click the settings button to modify configuration
-- **Delete**: Right-click and select "Remove"
-- **Search**: Use the search bar to filter webapps by name
-
-### WebApp Settings
-
-Each webapp can be configured with:
-
-- **Allow Multiple Tabs**: Enable tabbed browsing
-- **Allow Popups**: Control popup window behavior
-- **Allow Notifications**: Grant notification permission
-- **Show in System Tray**: Add icon to system tray
-- **Run in Background**: Keep running when window is closed
-
-## Development
-
-### Project Structure
-
-```
-webapps-manager/
-├── app/
-│   ├── ui/              # GTK4/Adwaita UI components
-│   ├── core/            # Business logic
-│   ├── webengine/       # WebKit management
-│   ├── data/            # Database and models
-│   ├── utils/           # Utilities (XDG, logging, validation)
-│   ├── application.py   # Main GTK Application
-│   └── main.py          # Entry point
-├── flatpak/             # Flatpak packaging files
-├── tests/               # Unit tests
-├── docs/                # Documentation
-├── pyproject.toml       # Project configuration
-└── README.md
-```
-
-### Code Quality
-
-The project follows strict code quality standards:
-
-- **Type Hints**: All functions have complete type annotations
-- **Docstrings**: Google-style docstrings for all public APIs
-- **Line Length**: Maximum 100 characters
-- **Testing**: Pytest with >80% coverage goal
-- **Linting**: flake8, mypy, black, isort
-
-### Running Tests
+Para abrir diretamente um webapp já cadastrado:
 
 ```bash
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=app --cov-report=html
-
-# Run specific test file
-pytest tests/test_webapp_manager.py
+python -m app.main --webapp <id-do-webapp>
 ```
 
-### Code Formatting
+## Backlog do planejamento inicial
 
-```bash
-# Format code
-black app/
+O documento técnico (`plano.txt`) prevê recursos que ainda não foram implementados e permanecem planejados para versões futuras:
 
-# Sort imports
-isort app/
+- **Gerenciamento granular de notificações**: `NotificationManager` está desenhado, porém a interface de aprovação e a integração com WebKit ainda não estão conectadas (atualmente permissões são negadas por padrão) (`app/webengine/webview_manager.py`:198).
+- **Persistência de sessão/abas e execução em segundo plano**: classes e campos estão modelados (`app/data/models.py`:99), mas a restauração automática das abas e o uso do sinalizador `run_background` ainda não foram concluídos.
+- **Manipulação aprimorada de downloads**: o hook existe na camada WebKit, porém falta UI/fluxo para acompanhar progresso e destino (`app/webengine/webview_manager.py`:214).
+- **Suite de testes automatizados e pipeline CI/CD**: o diretório `tests/` está vazio; as metas de cobertura >80% e validações contínuas ainda não foram iniciadas.
+- **Funcionalidades planejadas para versões futuras** (seções 23-24 do plano):
+  - v1.5: user-scripts com injeção de JS, bloqueio básico de anúncios, temas customizados e gestos de trackpad.
+  - v2.0: sincronização entre dispositivos, backup/restauração de configurações, sistema de plugins/extensões e suporte completo a PWAs.
+  - v2.5: perfis compartilhados opcionais, modo quiosque, controles parentais e integração com gerenciadores de senhas.
 
-# Type checking
-mypy app/
-
-# Linting
-flake8 app/
-```
-
-## Technical Details
-
-### Profile Isolation
-
-Each webapp gets its own isolated profile directory:
-
-```
-~/.local/share/br.com.infinity.webapps/profiles/<webapp-id>/
-├── cookies.db
-├── localstorage/
-├── indexeddb/
-├── cache/
-└── permissions.json
-```
-
-This ensures:
-- No cookie/session sharing between webapps
-- Multiple accounts on the same website
-- Easy backup (copy the profile directory)
-- Clean removal (delete the profile directory)
-
-### Resource Sharing
-
-WebApps Manager uses a shared WebKit network process across all webapps:
-
-- **Saves Memory**: ~30-50MB per webapp
-- **Maintains Security**: Each webapp still has isolated data
-- **Improves Stability**: Crash in one webapp doesn't affect others
-
-### Desktop Integration
-
-Automatic `.desktop` file creation provides:
-- Launcher integration (GNOME, KDE, XFCE)
-- Search integration
-- Custom icons
-- Quick actions (New Window, Preferences)
-
-## Troubleshooting
-
-### WebApp not loading
-
-Check the logs:
-```bash
-tail -f ~/.cache/br.com.infinity.webapps/logs/app.log
-```
-
-### Icons not downloading
-
-Ensure you have network access and the website has a favicon. You can manually set an icon in the webapp settings.
-
-### Notifications not working
-
-Make sure:
-1. Notifications are enabled in webapp settings
-2. xdg-desktop-portal is installed
-3. Your desktop environment supports notifications
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes following the code style
-4. Add tests for new functionality
-5. Submit a pull request
-
-## License
-
-This project is licensed under the GPL-3.0-or-later license. See [LICENSE](LICENSE) for details.
-
-## Acknowledgments
-
-- Built with [GTK4](https://gtk.org/) and [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/)
-- Powered by [WebKitGTK](https://webkitgtk.org/)
-- Inspired by Franz, Ferdi, and GNOME Web
-
-## Roadmap
-
-### v1.0 (Current)
-- [x] Basic webapp management
-- [x] Isolated profiles
-- [x] Desktop integration
-- [x] System tray support
-- [x] Native notifications
-
-### v1.5 (Planned)
-- [ ] User scripts (custom JavaScript injection)
-- [ ] Basic ad-blocking
-- [ ] Custom themes
-- [ ] Touchpad gestures
-
-### v2.0 (Future)
-- [ ] Cloud sync between devices
-- [ ] Backup/restore configurations
-- [ ] Plugin system
-- [ ] Browser extension support
-- [ ] PWA (Progressive Web App) support
-
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/yourusername/webapps-manager/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/webapps-manager/discussions)
-
----
-
-Made with ❤️ by Bruno Vaz
+Esses itens permanecem no backlog e servirão de guia para as próximas iterações do projeto.
