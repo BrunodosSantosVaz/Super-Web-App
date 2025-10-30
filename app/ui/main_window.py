@@ -46,6 +46,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.webapp_manager = webapp_manager
         self.profile_manager = profile_manager
+        self.webapp_windows: dict[str, WebAppWindow] = {}
 
         self.set_default_size(900, 600)
         self._language_subscription = None
@@ -303,14 +304,18 @@ class MainWindow(Adw.ApplicationWindow):
         self.launch_webapp(webapp_id)
 
     def launch_webapp(self, webapp_id: str) -> Optional["WebAppWindow"]:
-        """Launch a webapp.
-
-        Args:
-            webapp_id: WebApp ID to launch
-        """
+        """Launch or present a webapp window."""
         logger.info(f"Launching webapp: {webapp_id}")
 
-        # Get webapp and settings
+        self.webapp_manager.record_webapp_opened(webapp_id)
+
+        existing = self.webapp_windows.get(webapp_id)
+        if existing:
+            existing.set_visible(True)
+            existing.present()
+            logger.debug(f"Reusing existing window for {webapp_id}")
+            return existing
+
         webapp = self.webapp_manager.get_webapp(webapp_id)
         if not webapp:
             logger.error(f"WebApp not found: {webapp_id}")
@@ -321,22 +326,18 @@ class MainWindow(Adw.ApplicationWindow):
             logger.error(f"Settings not found for webapp: {webapp_id}")
             return None
 
-        # Record that webapp was opened
-        self.webapp_manager.record_webapp_opened(webapp_id)
-
-        # Import here to avoid circular imports
         from .webapp_window import WebAppWindow
 
-        # Create and show webapp window
         webapp_window = WebAppWindow(
             application=self.get_application(),
             webapp=webapp,
             settings=settings,
             webapp_manager=self.webapp_manager,
             profile_manager=self.profile_manager,
+            on_window_closed=self._on_webapp_window_closed,
         )
+        self.webapp_windows[webapp_id] = webapp_window
         webapp_window.present()
-
         logger.debug(f"WebApp window opened for {webapp_id}")
         return webapp_window
 
@@ -393,6 +394,9 @@ class MainWindow(Adw.ApplicationWindow):
             if response == "delete":
                 try:
                     self.webapp_manager.delete_webapp(webapp_id)
+                    window = self.webapp_windows.pop(webapp_id, None)
+                    if window is not None:
+                        window.destroy()
                     logger.info(f"WebApp deleted: {webapp_id}")
                     # Refresh list
                     self._load_webapps()
@@ -401,3 +405,10 @@ class MainWindow(Adw.ApplicationWindow):
 
         dialog.connect("response", on_response)
         dialog.present(self)
+
+
+    def _on_webapp_window_closed(self, webapp_id: str) -> None:
+        """Remove cached window when it is destroyed."""
+        if webapp_id in self.webapp_windows:
+            del self.webapp_windows[webapp_id]
+            logger.debug(f"WebApp window removed from registry: {webapp_id}")

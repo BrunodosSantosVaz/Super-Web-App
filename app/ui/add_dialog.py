@@ -170,10 +170,6 @@ class AddWebAppDialog(Adw.Dialog):
         self.tray_switch.set_active(False)
         system_group.add(self.tray_switch)
 
-        # Run in background
-        self.background_switch = Adw.SwitchRow()
-        self.background_switch.set_active(False)
-        system_group.add(self.background_switch)
 
         content_box.append(system_group)
 
@@ -218,8 +214,6 @@ class AddWebAppDialog(Adw.Dialog):
         self.notif_switch.set_subtitle(_("dialog.system.allow_notifications_desc"))
         self.tray_switch.set_title(_("dialog.system.show_tray"))
         self.tray_switch.set_subtitle(_("dialog.system.show_tray_desc"))
-        self.background_switch.set_title(_("dialog.system.run_background"))
-        self.background_switch.set_subtitle(_("dialog.system.run_background_desc"))
 
         selected = self.category_row.get_selected()
         self.categories_list = Gtk.StringList()
@@ -253,7 +247,6 @@ class AddWebAppDialog(Adw.Dialog):
             self.popups_switch.set_active(settings.allow_popups)
             self.notif_switch.set_active(settings.enable_notif)
             self.tray_switch.set_active(settings.show_tray)
-            self.background_switch.set_active(settings.run_background)
 
     def _on_language_changed(self, _language: str) -> None:
         """React to global language changes."""
@@ -355,7 +348,6 @@ class AddWebAppDialog(Adw.Dialog):
                     settings.allow_popups = self.popups_switch.get_active()
                     settings.enable_notif = self.notif_switch.get_active()
                     settings.show_tray = self.tray_switch.get_active()
-                    settings.run_background = self.background_switch.get_active()
                     self.webapp_manager.update_webapp_settings(settings)
 
                 # Update .desktop file
@@ -374,7 +366,6 @@ class AddWebAppDialog(Adw.Dialog):
                 settings.allow_popups = self.popups_switch.get_active()
                 settings.enable_notif = self.notif_switch.get_active()
                 settings.show_tray = self.tray_switch.get_active()
-                settings.run_background = self.background_switch.get_active()
                 self.webapp_manager.update_webapp_settings(settings)
 
                 # If icon was fetched, update webapp with icon path

@@ -58,14 +58,14 @@ class TrayManager:
         self._spawn(config)
 
     def refresh_labels(self, open_label: str, quit_label: str) -> None:
-        if not self._config:
+        if not self._config or not self._available:
             return
         self._config["open_label"] = open_label
         self._config["quit_label"] = quit_label
         self._spawn(self._config)
 
     def update_icon(self, icon_path: Optional[str]) -> None:
-        if not self._config:
+        if not self._config or not self._available:
             return
         self._config["icon_path"] = icon_path
         self._spawn(self._config)
@@ -86,11 +86,17 @@ class TrayManager:
         helper_args = json.dumps(config)
         cmd = [sys.executable, "-m", HELPER_MODULE, helper_args]
         env = os.environ.copy()
-        env.setdefault("PYTHONPATH", str(_project_root()))
+        project_path = str(_project_root())
+        existing = env.get("PYTHONPATH")
+        if existing:
+            env["PYTHONPATH"] = project_path + os.pathsep + existing
+        else:
+            env["PYTHONPATH"] = project_path
 
         try:
             self._process = subprocess.Popen(cmd, env=env, text=True)
             self._config = dict(config)
+            self._available = True
             logger.debug("Processo de bandeja iniciado")
         except FileNotFoundError:
             logger.warning(

@@ -140,6 +140,14 @@ class WebAppsApplication(Adw.Application):
         preferences_action.connect("activate", self._on_preferences_action)
         self.add_action(preferences_action)
 
+        open_webapp_action = Gio.SimpleAction.new("open-webapp", GLib.VariantType.new("s"))
+        open_webapp_action.connect("activate", self._on_open_webapp_action)
+        self.add_action(open_webapp_action)
+
+        show_main_action = Gio.SimpleAction.new("show-main", None)
+        show_main_action.connect("activate", self._on_show_main_action)
+        self.add_action(show_main_action)
+
         # About action
         about_action = Gio.SimpleAction.new("about", None)
         about_action.connect("activate", self._on_about_action)
@@ -160,17 +168,21 @@ class WebAppsApplication(Adw.Application):
 
         logger.debug("Keyboard shortcuts setup complete")
 
-    def do_activate(self) -> None:
-        """Application activation - create and show main window."""
-        logger.info("Application activated")
-
-        # Create main window if it doesn't exist
+    def _ensure_main_window(self) -> None:
+        """Create main window if it does not exist."""
         if not self.main_window:
             self.main_window = MainWindow(
                 application=self,
                 webapp_manager=self.webapp_manager,
                 profile_manager=self.profile_manager,
             )
+
+    def do_activate(self) -> None:
+        """Application activation - create and show main window."""
+        logger.info("Application activated")
+
+        # Create main window if it doesn't exist
+        self._ensure_main_window()
 
         # Present window unless suppressed (e.g., CLI webapp launch)
         if self._suppress_main_window:
@@ -256,6 +268,7 @@ class WebAppsApplication(Adw.Application):
 
     def _launch_webapp_from_cli(self, webapp_id: str, new_window: bool) -> bool:
         """Launch webapp requested via command line."""
+        self._ensure_main_window()
         if not self.main_window:
             logger.error("Cannot launch webapp %s: main window not initialised", webapp_id)
             return GLib.SOURCE_REMOVE
@@ -281,8 +294,7 @@ class WebAppsApplication(Adw.Application):
 
     def _show_preferences_dialog(self) -> bool:
         """Show preferences dialog (used by CLI and action)."""
-        if not self.main_window:
-            self.activate()
+        self._ensure_main_window()
 
         if not self.main_window:
             return GLib.SOURCE_REMOVE
@@ -290,6 +302,22 @@ class WebAppsApplication(Adw.Application):
         dialog = PreferencesDialog(self.main_window, self)
         dialog.present()
         return GLib.SOURCE_REMOVE
+
+    def _on_open_webapp_action(self, action: Gio.SimpleAction, parameter: GLib.Variant) -> None:
+        """Handle external request to open a webapp window."""
+        if not parameter:
+            return
+        webapp_id = parameter.get_string()
+        logger.info("Action open-webapp for %s", webapp_id)
+        self._ensure_main_window()
+        if self.main_window:
+            self.main_window.launch_webapp(webapp_id)
+
+    def _on_show_main_action(self, action: Gio.SimpleAction, parameter: Optional[GLib.Variant]) -> None:
+        """Handle request to show the main window."""
+        self._ensure_main_window()
+        if self.main_window:
+            self.main_window.present()
 
     def _on_preferences_action(
         self, action: Gio.SimpleAction, parameter: Optional[GLib.Variant]

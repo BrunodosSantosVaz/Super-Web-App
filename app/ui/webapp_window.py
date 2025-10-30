@@ -4,8 +4,9 @@ This module provides the window that displays a webapp using WebKit WebView.
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 import sys
+import shutil
 
 import gi
 
@@ -37,6 +38,7 @@ class WebAppWindow(Adw.ApplicationWindow):
         settings: WebAppSettings,
         webapp_manager: WebAppManager,
         profile_manager: ProfileManager,
+        on_window_closed: Optional[Callable[[str], None]] = None,
         **kwargs
     ) -> None:
         """Initialize webapp window.
@@ -55,6 +57,7 @@ class WebAppWindow(Adw.ApplicationWindow):
         self.settings = settings
         self.webapp_manager = webapp_manager
         self.profile_manager = profile_manager
+        self._on_window_closed = on_window_closed
         self.tray_manager = TrayManager() if APP_INDICATOR_AVAILABLE else None
 
         # Set window properties
@@ -191,23 +194,26 @@ class WebAppWindow(Adw.ApplicationWindow):
         if not self.tray_manager or not self.settings.show_tray:
             return
 
+        if shutil.which("gapplication") is None:
+            logger.warning("gapplication não encontrado; bandeja desativada para este webapp")
+            return
+
         icon_path: Optional[str] = None
         if self.webapp.icon_path and Path(self.webapp.icon_path).exists():
             icon_path = self.webapp.icon_path
 
         open_cmd = [
-            sys.executable,
-            "-m",
-            "app.main",
-            "--webapp",
+            "gapplication",
+            "action",
+            APP_ID,
+            "app.open-webapp::s",
             self.webapp.id,
-            "--show-main-window",
         ]
         quit_cmd = [
-            sys.executable,
-            "-m",
-            "app.main",
-            "--quit",
+            "gapplication",
+            "action",
+            APP_ID,
+            "app.quit",
         ]
 
         self.tray_manager.ensure_icon(
@@ -320,6 +326,10 @@ class WebAppWindow(Adw.ApplicationWindow):
 
         logger.debug(f"Window state saved for {self.webapp.name}")
 
+        if self.tray_manager and self.settings.show_tray:
+            self.hide()
+            return True
+
         # Allow close
         return False
 
@@ -333,3 +343,8 @@ class WebAppWindow(Adw.ApplicationWindow):
             i18n_unsubscribe(self._language_subscription)
         if self.tray_manager:
             self.tray_manager.destroy()
+        if self._on_window_closed:
+            try:
+                self._on_window_closed(self.webapp.id)
+            except Exception as exc:
+                logger.debug("Erro ao notificar fechamento de janela: %s", exc)
