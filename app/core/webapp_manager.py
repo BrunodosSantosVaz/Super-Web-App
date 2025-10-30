@@ -6,6 +6,8 @@ database, profiles, and UI.
 """
 
 from datetime import datetime
+import os
+import signal
 from typing import List, Optional
 
 from ..data.database import Database
@@ -14,6 +16,7 @@ from ..utils.logger import get_logger
 from ..utils.validators import validate_url, validate_webapp_name
 from ..utils.xdg import XDGDirectories
 from ..webengine.profile_manager import ProfileManager
+from .desktop_integration import DesktopIntegration
 
 logger = get_logger(__name__)
 
@@ -189,10 +192,16 @@ class WebAppManager:
         if icon_path.exists():
             icon_path.unlink()
 
-        # Delete .desktop file if exists
-        desktop_file = XDGDirectories.get_desktop_file_path(webapp_id)
-        if desktop_file.exists():
-            desktop_file.unlink()
+        # Remove PID tracking file if left behind
+        pid_file = XDGDirectories.get_webapp_pid_file(webapp_id)
+        if pid_file.exists():
+            try:
+                pid_file.unlink()
+            except OSError as exc:
+                logger.debug("Não foi possível remover arquivo PID: %s", exc)
+
+        # Remove desktop integrations (launcher, desktop shortcut, system icon)
+        DesktopIntegration.delete_desktop_file(webapp_id)
 
         logger.info(f"WebApp deleted: {webapp_id}")
 
@@ -218,6 +227,73 @@ class WebAppManager:
         """
         logger.debug(f"Updating settings for webapp: {settings.webapp_id}")
         self.db.update_webapp_settings(settings)
+
+    def close_running_webapp(self, webapp_id: str) -> bool:
+        """Attempt to close a running standalone webapp via its PID file."""
+        pid_file = XDGDirectories.get_webapp_pid_file(webapp_id)
+        if not pid_file.exists():
+            logger.debug("PID file not found for webapp %s", webapp_id)
+            return False
+
+        try:
+            pid_str = pid_file.read_text(encoding="utf-8").strip()
+            pid = int(pid_str)
+        except Exception as exc:
+            logger.warning("Failed to read PID file for %s: %s", webapp_id, exc)
+            try:
+                pid_file.unlink()
+            except OSError:
+                pass
+            return False
+
+        try:
+            os.kill(pid, signal.SIGTERM)
+            logger.info("Sent SIGTERM to webapp %s (PID %d)", webapp_id, pid)
+            try:
+                pid_file.unlink()
+            except OSError:
+                pass
+        except ProcessLookupError:
+            logger.debug("Process for webapp %s already stopped", webapp_id)
+            try:
+                pid_file.unlink()
+            except OSError:
+                pass
+            return False
+        except PermissionError as exc:
+            logger.warning("Permission denied sending SIGTERM to %s: %s", webapp_id, exc)
+            return False
+        except Exception as exc:
+            logger.error("Failed to signal webapp %s: %s", webapp_id, exc)
+            return False
+
+        return True
+
+    def refresh_running_webapp(self, webapp_id: str) -> bool:
+        """Signal a running webapp to refresh its branding (icon/name)."""
+        pid_file = XDGDirectories.get_webapp_pid_file(webapp_id)
+        if not pid_file.exists():
+            return False
+
+        try:
+            pid = int(pid_file.read_text(encoding="utf-8").strip())
+        except Exception as exc:
+            logger.warning("Failed to read PID file for refresh %s: %s", webapp_id, exc)
+            return False
+
+        try:
+            os.kill(pid, signal.SIGUSR1)
+            logger.debug("Refresh signal enviado para webapp %s (PID %d)", webapp_id, pid)
+            return True
+        except ProcessLookupError:
+            logger.debug("Process for webapp %s not found during refresh", webapp_id)
+            return False
+        except PermissionError as exc:
+            logger.warning("Permission denied sending refresh to %s: %s", webapp_id, exc)
+            return False
+        except Exception as exc:
+            logger.error("Failed to refresh webapp %s: %s", webapp_id, exc)
+            return False
 
     def record_webapp_opened(self, webapp_id: str) -> None:
         """Record that a webapp was opened (for statistics).

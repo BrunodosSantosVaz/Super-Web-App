@@ -5,12 +5,19 @@ existing ones with all configuration options.
 """
 
 from typing import Optional
+import threading
+import uuid
+from urllib.parse import urlparse
+from pathlib import Path
+import shutil
+
+from PIL import Image
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gtk
+from gi.repository import Adw, Gio, GLib, Gtk
 
 from ..core.desktop_integration import DesktopIntegration
 from ..core.icon_fetcher import IconFetcher
@@ -23,6 +30,7 @@ from ..utils.i18n import (
     unsubscribe as i18n_unsubscribe,
 )
 from ..utils.logger import get_logger
+from ..utils.xdg import XDGDirectories
 
 logger = get_logger(__name__)
 
@@ -56,6 +64,14 @@ class AddWebAppDialog(Adw.Dialog):
         self._icon_button_status = "default"
         self._language_subscription = None
         self._language_subscription = i18n_subscribe(self._on_language_changed)
+        self._url_change_timeout_id: Optional[int] = None
+        self._is_fetching_icon = False
+        self._updating_name_field = False
+        self._name_was_edited_manually = False
+        self._file_dialog: Optional[Gtk.FileDialog] = None
+        self._custom_icon_selected = False
+        self._custom_icon_selected_before_fetch = False
+        self._metadata_refresh_pending = self._is_edit
 
         self.set_title(_("dialog.edit_title") if self._is_edit else _("dialog.new_title"))
         self.set_content_width(600)
@@ -100,15 +116,24 @@ class AddWebAppDialog(Adw.Dialog):
         basic_group = Adw.PreferencesGroup()
         self.basic_group = basic_group
 
-        # Name entry
-        self.name_entry = Adw.EntryRow()
-        self.name_entry.connect("changed", self._on_input_changed)
-        basic_group.add(self.name_entry)
-
         # URL entry
         self.url_entry = Adw.EntryRow()
         self.url_entry.connect("changed", self._on_input_changed)
+        self.url_entry.connect("changed", self._on_url_changed)
+        self.url_entry.connect("entry-activated", self._on_url_entry_activated)
         basic_group.add(self.url_entry)
+        url_child = self.url_entry.get_child()
+        focus_controller = Gtk.EventControllerFocus()
+        focus_controller.connect("enter", self._on_url_focus_enter)
+        if isinstance(url_child, Gtk.Widget):
+            url_child.add_controller(focus_controller)
+        else:
+            self.url_entry.add_controller(focus_controller)
+
+        # Name entry
+        self.name_entry = Adw.EntryRow()
+        self.name_entry.connect("changed", self._on_name_changed)
+        basic_group.add(self.name_entry)
 
         # Category dropdown
         category_row = Adw.ComboRow()
@@ -130,12 +155,19 @@ class AddWebAppDialog(Adw.Dialog):
         self.icon_group = icon_group
 
         icon_button_row = Adw.ActionRow()
+        icon_button_row.set_activatable(True)
+        icon_button_row.connect("activated", self._on_icon_row_activated)
         self.icon_button_row = icon_button_row
 
-        fetch_icon_button = Gtk.Button()
-        fetch_icon_button.connect("clicked", self._on_fetch_icon_clicked)
-        icon_button_row.add_suffix(fetch_icon_button)
-        self.fetch_icon_button = fetch_icon_button
+        # Icon image display
+        self.icon_image = Gtk.Image()
+        self.icon_image.set_pixel_size(48)
+        self.icon_image.set_from_icon_name("image-x-generic-symbolic")
+        icon_button_row.add_prefix(self.icon_image)
+
+        image_gesture = Gtk.GestureClick()
+        image_gesture.connect("released", self._on_icon_image_clicked)
+        self.icon_image.add_controller(image_gesture)
 
         icon_group.add(icon_button_row)
         content_box.append(icon_group)
@@ -196,14 +228,14 @@ class AddWebAppDialog(Adw.Dialog):
         self.category_row.set_title(_("dialog.field.category"))
         self.icon_group.set_title(_("dialog.group.icon"))
         self.icon_button_row.set_title(_("dialog.icon.fetch_auto"))
-        status_map = {
-            "default": _("dialog.icon.fetch_button"),
-            "loading": _("dialog.icon.fetch_loading"),
-            "success": _("dialog.icon.fetch_success"),
-            "failure": _("dialog.icon.fetch_failure"),
-            "error": _("dialog.icon.fetch_error"),
-        }
-        self.fetch_icon_button.set_label(status_map.get(self._icon_button_status, _("dialog.icon.fetch_button")))
+        self.icon_button_row.set_subtitle(
+            _("dialog.icon.fetch_loading") if self._icon_button_status == "loading"
+            else _("dialog.icon.fetch_success") if self._icon_button_status == "success"
+            else _("dialog.icon.custom_selected") if self._icon_button_status == "custom"
+            else _("dialog.icon.fetch_failure") if self._icon_button_status == "failure"
+            else _("dialog.icon.fetch_error") if self._icon_button_status == "error"
+            else ""
+        )
         self.nav_group.set_title(_("dialog.group.navigation"))
         self.tabs_switch.set_title(_("dialog.navigation.allow_tabs"))
         self.tabs_switch.set_subtitle(_("dialog.navigation.allow_tabs_desc"))
@@ -230,8 +262,11 @@ class AddWebAppDialog(Adw.Dialog):
         if not self.webapp:
             return
 
+        self._updating_name_field = True
         self.name_entry.set_text(self.webapp.name)
+        self._updating_name_field = False
         self.url_entry.set_text(self.webapp.url)
+        self._name_was_edited_manually = True
 
         # Find and set category
         if self.webapp.category:
@@ -239,6 +274,14 @@ class AddWebAppDialog(Adw.Dialog):
                 if cat.id == self.webapp.category:
                     self.category_row.set_selected(i)
                     break
+
+        # Load icon if exists
+        if self.webapp.icon_path:
+            from pathlib import Path
+            if Path(self.webapp.icon_path).exists():
+                self.fetched_icon_path = self.webapp.icon_path
+                self.icon_image.set_from_file(self.webapp.icon_path)
+                self._icon_button_status = "success"
 
         # Load settings
         settings = self.webapp_manager.get_webapp_settings(self.webapp.id)
@@ -269,49 +312,359 @@ class AddWebAppDialog(Adw.Dialog):
 
         self.save_button.set_sensitive(len(name) > 0 and len(url) > 0)
 
-    def _on_fetch_icon_clicked(self, button: Gtk.Button) -> None:
-        """Handle fetch icon button clicked.
+    def _on_name_changed(self, entry: Adw.EntryRow) -> None:
+        """Track manual edits on the name field."""
+        if self._updating_name_field:
+            self._on_input_changed(entry)
+            return
+
+        self._name_was_edited_manually = True
+        self._on_input_changed(entry)
+
+    def _on_url_changed(self, entry: Adw.EntryRow) -> None:
+        """Handle URL changed - automatically fetch icon after delay.
 
         Args:
-            button: Button widget
+            entry: URL entry that changed
         """
+        # Cancel previous timeout if exists
+        if self._url_change_timeout_id is not None:
+            GLib.source_remove(self._url_change_timeout_id)
+            self._url_change_timeout_id = None
+
+        url = entry.get_text().strip()
+        if url and not self._is_edit:
+            self._custom_icon_selected = False
+
+        if url and not self._is_edit:
+            fallback_name = self._derive_name_from_url(url)
+            if fallback_name:
+                self._set_name_from_title(fallback_name)
+
+        # Only fetch automatically for new webapps; edits use explicit refresh
+        if url and url.startswith(("http://", "https://")) and not self._is_edit:
+            # Wait 1.5 seconds after user stops typing
+            self._url_change_timeout_id = GLib.timeout_add(1500, self._auto_fetch_icon)
+
+    def _on_url_focus_enter(
+        self, _controller: Gtk.EventControllerFocus, *_args
+    ) -> None:
+        """Refresh metadata when the URL field gains focus during edit."""
+        if not self._is_edit or not self._metadata_refresh_pending:
+            return
+        self._metadata_refresh_pending = False
+        self._request_metadata_refresh(force=True)
+
+    def _on_url_entry_activated(self, *_args) -> None:
+        """Trigger metadata refresh when user presses Enter on URL field."""
+        self._request_metadata_refresh(force=True)
+
+    def _auto_fetch_icon(self) -> bool:
+        """Automatically fetch icon in background."""
+        self._url_change_timeout_id = None
+
+        if not self._is_fetching_icon:
+            self._fetch_icon_async(force=False)
+
+        return False  # Don't repeat timeout
+
+    def _fetch_icon_async(self, *, force: bool = False) -> None:
+        """Fetch icon in background thread to avoid blocking UI."""
         url = self.url_entry.get_text().strip()
 
         if not url:
-            logger.warning("Cannot fetch icon: no URL provided")
             return
 
-        logger.info(f"Fetching icon for URL: {url}")
-
-        # Show loading state
-        button.set_sensitive(False)
+        self._custom_icon_selected_before_fetch = self._custom_icon_selected
+        self._is_fetching_icon = True
         self._icon_button_status = "loading"
-        button.set_label(_("dialog.icon.fetch_loading"))
+        self._apply_translations()
 
-        # TODO: Run in background thread to avoid blocking UI
-        # For now, fetch synchronously
-        try:
-            # Generate temporary ID for icon fetching
-            temp_id = "temp"
-            icon_path = self.icon_fetcher.fetch_icon(url, temp_id)
+        def fetch_in_thread():
+            try:
+                # Use webapp ID if editing, or generate unique temp ID for new webapp
+                icon_id = self.webapp.id if self._is_edit else f"temp_{uuid.uuid4()}"
+                icon_path, page_title = self.icon_fetcher.fetch_icon_and_title(
+                    url, icon_id
+                )
+                icon_path_str = str(icon_path) if icon_path else None
+                GLib.idle_add(self._on_icon_fetched, icon_path_str, page_title, force)
+            except Exception as e:
+                logger.error(f"Error fetching icon: {e}", exc_info=True)
+                GLib.idle_add(self._on_icon_fetch_error)
 
-            if icon_path:
+        thread = threading.Thread(target=fetch_in_thread, daemon=True)
+        thread.start()
+
+    def _on_icon_fetched(
+        self, icon_path: Optional[str], page_title: Optional[str], force_name: bool
+    ) -> bool:
+        """Handle icon fetch completion in main thread."""
+        self._is_fetching_icon = False
+        user_override_during_fetch = (
+            self._custom_icon_selected and not self._custom_icon_selected_before_fetch
+        )
+
+        if icon_path:
+            if user_override_during_fetch:
+                logger.debug(
+                    "Usuário escolheu ícone personalizado durante a busca; mantendo seleção"
+                )
+            elif self._custom_icon_selected and not force_name:
+                logger.debug("Ícone personalizado já definido; mantendo seleção existente")
+            else:
                 self.fetched_icon_path = str(icon_path)
                 self._icon_button_status = "success"
-                button.set_label(_("dialog.icon.fetch_success"))
+                self.icon_image.set_from_file(str(icon_path))
+                self._custom_icon_selected = False
                 logger.info("Icon fetched successfully")
-            else:
-                self._icon_button_status = "failure"
-                button.set_label(_("dialog.icon.fetch_failure"))
-                logger.warning("Failed to fetch icon")
+        elif not self._custom_icon_selected:
+            self._icon_button_status = "failure"
+            self.icon_image.set_from_icon_name("image-missing-symbolic")
+            logger.warning("Failed to fetch icon")
+        else:
+            logger.debug("Mantendo ícone personalizado após falha na busca")
 
-        except Exception as e:
-            logger.error(f"Error fetching icon: {e}", exc_info=True)
+        if page_title and (force_name or not self._name_was_edited_manually):
+            self._set_name_from_title(page_title, force=force_name)
+        elif force_name:
+            fallback = self._derive_name_from_url(self.url_entry.get_text().strip())
+            if fallback:
+                self._set_name_from_title(fallback, force=True)
+
+        self._custom_icon_selected_before_fetch = False
+        self._apply_translations()
+        return False
+
+    def _request_metadata_refresh(self, force: bool) -> None:
+        """Internal helper to request metadata refresh for current URL."""
+        url = self.url_entry.get_text().strip()
+        if not url:
+            return
+
+        self._custom_icon_selected_before_fetch = self._custom_icon_selected
+
+        if force:
+            self._custom_icon_selected = False
+            self._name_was_edited_manually = False
+
+        if self._url_change_timeout_id is not None:
+            GLib.source_remove(self._url_change_timeout_id)
+            self._url_change_timeout_id = None
+
+        self._fetch_icon_async(force=force)
+
+    def _on_icon_fetch_error(self) -> bool:
+        """Handle icon fetch error in main thread."""
+        self._is_fetching_icon = False
+        if self._custom_icon_selected:
+            logger.debug("Ignoring fetch error because a custom icon is in use")
+        elif self._custom_icon_selected_before_fetch and self.fetched_icon_path:
+            try:
+                self.icon_image.set_from_file(self.fetched_icon_path)
+                self._custom_icon_selected = True
+                self._icon_button_status = "custom"
+                logger.debug("Restored previous custom icon after fetch error")
+            except Exception as exc:
+                logger.warning("Could not restore previous custom icon: %s", exc)
+                self._icon_button_status = "error"
+                self.icon_image.set_from_icon_name("dialog-error-symbolic")
+        else:
             self._icon_button_status = "error"
-            button.set_label(_("dialog.icon.fetch_error"))
+            self.icon_image.set_from_icon_name("dialog-error-symbolic")
+        self._custom_icon_selected_before_fetch = False
+        self._apply_translations()
+        return False
 
+    def _set_name_from_title(self, title: Optional[str], *, force: bool = False) -> None:
+        """Update the name field with an automatically detected title."""
+        if not title:
+            return
+
+        if not force and (self._is_edit or self._name_was_edited_manually):
+            return
+
+        normalized = " ".join(title.split()).strip()
+        if not normalized:
+            return
+
+        current = self.name_entry.get_text().strip()
+        if current.lower() == normalized.lower():
+            return
+
+        self._updating_name_field = True
+        self.name_entry.set_text(normalized)
+        self._updating_name_field = False
+        self._on_input_changed(self.name_entry)
+
+    def _derive_name_from_url(self, url: str) -> Optional[str]:
+        """Suggest a name based on the URL's hostname."""
+        if not url:
+            return None
+
+        parsed = urlparse(url if "://" in url else f"http://{url}")
+        host = parsed.hostname or ""
+        if not host:
+            return None
+
+        host = host.strip()
+        if host.startswith("www."):
+            host = host[4:]
+
+        host = host.split(":")[0]
+        if not host:
+            return None
+
+        parts = [part for part in host.split(".") if part]
+        if not parts:
+            return None
+
+        candidate = parts[0]
+        generic_parts = {"www", "app", "web", "site"}
+        if candidate in generic_parts and len(parts) > 1:
+            candidate = parts[1]
+
+        candidate = candidate.replace("-", " ").replace("_", " ").strip()
+        if not candidate:
+            return None
+
+        return candidate.title()
+
+    def _on_icon_row_activated(self, _row: Adw.ActionRow, *_args) -> None:
+        """Handle clicks on the icon row."""
+        self._show_icon_file_dialog()
+
+    def _on_icon_image_clicked(
+        self, _gesture: Gtk.GestureClick, _n_press: int, _x: float, _y: float
+    ) -> None:
+        """Allow clicking directly on the icon preview."""
+        self._show_icon_file_dialog()
+
+    def _show_icon_file_dialog(self) -> None:
+        """Open file chooser to select a custom icon."""
+        dialog = Gtk.FileDialog()
+        dialog.set_title(_("dialog.icon.choose_title"))
+        dialog.set_modal(True)
+
+        image_filter = Gtk.FileFilter()
+        image_filter.set_name(_("dialog.icon.file_filter"))
+        image_filter.add_mime_type("image/png")
+        image_filter.add_mime_type("image/jpeg")
+        image_filter.add_mime_type("image/svg+xml")
+        image_filter.add_mime_type("image/webp")
+        image_filter.add_mime_type("image/x-icon")
+
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(image_filter)
+        dialog.set_filters(filters)
+
+        self._file_dialog = dialog
+
+        from pathlib import Path
+
+        candidates = [
+            Path.home() / ".local" / "share" / "icons" / "hicolor" / "48x48" / "apps",
+            Path.home() / ".local" / "share" / "icons",
+            Path("/usr/share/icons/hicolor/48x48/apps"),
+            Path("/usr/share/icons"),
+        ]
+
+        for base in candidates:
+            if base.exists():
+                try:
+                    dialog.set_initial_folder(Gio.File.new_for_path(str(base)))
+                except Exception as exc:
+                    logger.debug("Não foi possível definir pasta inicial do seletor de ícones: %s", exc)
+                break
+
+        parent_window = self.get_root()
+        if not isinstance(parent_window, Gtk.Window):
+            parent_window = None
+
+        dialog.open(parent_window, None, self._on_icon_file_dialog_response)
+
+    def _on_icon_file_dialog_response(
+        self, dialog: Gtk.FileDialog, result: Gio.AsyncResult
+    ) -> None:
+        """Handle the result from the icon file chooser."""
+        try:
+            gio_file = dialog.open_finish(result)
+        except GLib.Error as err:
+            if err.matches(Gio.io_error_quark(), Gio.IOErrorEnum.CANCELLED):
+                logger.debug("Icon selection cancelled by user")
+            else:
+                logger.warning(f"Failed to open icon file: {err}")
+            return
         finally:
-            button.set_sensitive(True)
+            self._file_dialog = None
+
+        if gio_file is None:
+            return
+
+        path = gio_file.get_path()
+        if not path:
+            logger.warning("Selected icon file has no accessible path")
+            return
+
+        self._apply_custom_icon(path)
+
+    def _persist_icon(self, webapp_id: str) -> Optional[str]:
+        """Copy current icon to the app icon directory and return its path."""
+        if not self.fetched_icon_path:
+            return None
+
+        source = Path(self.fetched_icon_path)
+        if not source.exists():
+            logger.warning("Icon source does not exist: %s", source)
+            return None
+
+        icons_dir = XDGDirectories.get_icons_dir()
+        final_path = icons_dir / f"{webapp_id}.png"
+
+        try:
+            image = Image.open(source)
+            if image.mode not in ("RGB", "RGBA"):
+                image = image.convert("RGBA")
+            image.thumbnail((128, 128), Image.Resampling.LANCZOS)
+            image.save(final_path, "PNG", optimize=True)
+
+            if "temp_" in source.stem:
+                try:
+                    source.unlink()
+                except OSError as exc:
+                    logger.debug("Could not remove temp icon: %s", exc)
+
+            self.fetched_icon_path = str(final_path)
+            return str(final_path)
+
+        except Exception as exc:
+            logger.warning("Failed to persist icon for %s: %s", webapp_id, exc)
+            try:
+                if source.suffix.lower() == ".png":
+                    shutil.copy2(source, final_path)
+                    self.fetched_icon_path = str(final_path)
+                    return str(final_path)
+            except Exception:
+                pass
+            return self.fetched_icon_path
+
+    def _apply_custom_icon(self, path: str) -> None:
+        """Set a custom icon chosen by the user."""
+        try:
+            self.icon_image.set_from_file(path)
+        except Exception as exc:
+            logger.warning(f"Failed to load custom icon: {exc}")
+            self._icon_button_status = "failure"
+            self.icon_image.set_from_icon_name("image-missing-symbolic")
+            self._apply_translations()
+            return
+
+        self._is_fetching_icon = False
+        self._custom_icon_selected = True
+        self._custom_icon_selected_before_fetch = False
+        self.fetched_icon_path = path
+        self._icon_button_status = "custom"
+        self._apply_translations()
 
     def _on_save_clicked(self, button: Gtk.Button) -> None:
         """Handle save button clicked.
@@ -332,29 +685,57 @@ class AddWebAppDialog(Adw.Dialog):
 
         try:
             if self.webapp:
-                # Update existing webapp
-                self.webapp_manager.update_webapp(
-                    self.webapp.id,
-                    name=name,
-                    url=url,
-                    category=category,
-                    icon_path=self.fetched_icon_path,
+                # Prepare icon source before deletion
+                temp_icon_path: Optional[Path] = None
+                if self.fetched_icon_path:
+                    source_path = Path(self.fetched_icon_path)
+                    if source_path.exists():
+                        temp_icon_path = (
+                            XDGDirectories.get_icons_dir()
+                            / f"temp_edit_{uuid.uuid4()}.png"
+                        )
+                        try:
+                            shutil.copy2(source_path, temp_icon_path)
+                            self.fetched_icon_path = str(temp_icon_path)
+                        except Exception as exc:
+                            logger.warning(
+                                "Could not prepare temporary icon for edit: %s", exc
+                            )
+
+                # Close and delete current webapp
+                self.webapp_manager.close_running_webapp(self.webapp.id)
+                self.webapp_manager.delete_webapp(self.webapp.id)
+
+                # Create new webapp with updated data
+                new_webapp, new_settings = self.webapp_manager.create_webapp(
+                    name, url, category
                 )
 
-                # Update settings
-                settings = self.webapp_manager.get_webapp_settings(self.webapp.id)
-                if settings:
-                    settings.allow_tabs = self.tabs_switch.get_active()
-                    settings.allow_popups = self.popups_switch.get_active()
-                    settings.enable_notif = self.notif_switch.get_active()
-                    settings.show_tray = self.tray_switch.get_active()
-                    self.webapp_manager.update_webapp_settings(settings)
+                new_settings.allow_tabs = self.tabs_switch.get_active()
+                new_settings.allow_popups = self.popups_switch.get_active()
+                new_settings.enable_notif = self.notif_switch.get_active()
+                new_settings.show_tray = self.tray_switch.get_active()
+                self.webapp_manager.update_webapp_settings(new_settings)
 
-                # Update .desktop file
-                updated_webapp = self.webapp_manager.get_webapp(self.webapp.id)
-                DesktopIntegration.update_desktop_file(updated_webapp)
+                icon_path = self._persist_icon(new_webapp.id)
+                if icon_path:
+                    updated = self.webapp_manager.update_webapp(
+                        new_webapp.id, icon_path=icon_path
+                    )
+                    if updated:
+                        new_webapp = updated
 
-                logger.info(f"WebApp updated: {self.webapp.id}")
+                DesktopIntegration.create_desktop_file(new_webapp)
+
+                # Ensure no temp icon is left behind if it still exists
+                if temp_icon_path and temp_icon_path.exists():
+                    try:
+                        temp_icon_path.unlink()
+                    except OSError:
+                        pass
+
+                self.webapp = new_webapp
+                logger.info("WebApp replaced with new instance: %s", new_webapp.id)
             else:
                 # Create new webapp
                 webapp, settings = self.webapp_manager.create_webapp(
@@ -368,13 +749,12 @@ class AddWebAppDialog(Adw.Dialog):
                 settings.show_tray = self.tray_switch.get_active()
                 self.webapp_manager.update_webapp_settings(settings)
 
-                # If icon was fetched, update webapp with icon path
-                if self.fetched_icon_path:
-                    self.webapp_manager.update_webapp(
-                        webapp.id, icon_path=self.fetched_icon_path
-                    )
-                    # Reload webapp to get updated icon path
-                    webapp = self.webapp_manager.get_webapp(webapp.id)
+                # If icon was fetched, move it to the webapp's final icon path
+                icon_path = self._persist_icon(webapp.id)
+                if icon_path:
+                    webapp = self.webapp_manager.update_webapp(webapp.id, icon_path=icon_path)
+                    if not webapp:
+                        webapp = self.webapp_manager.get_webapp(webapp.id)
 
                 # Create .desktop file for launcher integration
                 DesktopIntegration.create_desktop_file(webapp)

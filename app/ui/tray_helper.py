@@ -56,6 +56,10 @@ class TrayApplication:
         self.open_item.connect("activate", self.on_open)
         menu.append(self.open_item)
 
+        # Add separator to visually highlight the open action
+        separator = Gtk.SeparatorMenuItem()
+        menu.append(separator)
+
         self.quit_item = Gtk.MenuItem()
         self.quit_item.connect("activate", self.on_quit)
         menu.append(self.quit_item)

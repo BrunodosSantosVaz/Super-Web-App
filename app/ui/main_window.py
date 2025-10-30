@@ -5,6 +5,9 @@ including the list view, search, and management actions.
 """
 
 from typing import Optional
+from pathlib import Path
+import subprocess
+import sys
 
 import gi
 
@@ -46,9 +49,22 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.webapp_manager = webapp_manager
         self.profile_manager = profile_manager
-        self.webapp_windows: dict[str, WebAppWindow] = {}
 
         self.set_default_size(900, 600)
+
+        # Set application icon
+        icon_path = Path(__file__).parent.parent / "data" / "icon.png"
+        if icon_path.exists():
+            try:
+                from gi.repository import Gdk, GdkPixbuf
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                    str(icon_path), 48, 48, True
+                )
+                # Note: GTK4 sets icon via desktop file, but we try anyway
+                logger.debug(f"Main window icon loaded from {icon_path}")
+            except Exception as e:
+                logger.debug(f"Could not load main window icon: {e}")
+
         self._language_subscription = None
         self._language_subscription = i18n_subscribe(self._on_language_changed)
 
@@ -292,7 +308,7 @@ class MainWindow(Adw.ApplicationWindow):
         dialog = AddWebAppDialog(
             self, self.webapp_manager, on_saved=self._load_webapps
         )
-        dialog.present()
+        dialog.present(self)
 
     def _on_launch_clicked(self, button: Gtk.Button, webapp_id: str) -> None:
         """Handle launch button clicked.
@@ -303,43 +319,43 @@ class MainWindow(Adw.ApplicationWindow):
         """
         self.launch_webapp(webapp_id)
 
-    def launch_webapp(self, webapp_id: str) -> Optional["WebAppWindow"]:
-        """Launch or present a webapp window."""
-        logger.info(f"Launching webapp: {webapp_id}")
+    def launch_webapp(self, webapp_id: str) -> None:
+        """Launch webapp in separate process."""
+        logger.info(f"Launching webapp in separate process: {webapp_id}")
 
         self.webapp_manager.record_webapp_opened(webapp_id)
-
-        existing = self.webapp_windows.get(webapp_id)
-        if existing:
-            existing.set_visible(True)
-            existing.present()
-            logger.debug(f"Reusing existing window for {webapp_id}")
-            return existing
 
         webapp = self.webapp_manager.get_webapp(webapp_id)
         if not webapp:
             logger.error(f"WebApp not found: {webapp_id}")
-            return None
+            return
 
-        settings = self.webapp_manager.get_webapp_settings(webapp_id)
-        if not settings:
-            logger.error(f"Settings not found for webapp: {webapp_id}")
-            return None
+        # Launch webapp in separate process
+        try:
+            cmd = [
+                sys.executable,
+                "-m",
+                "app.standalone_webapp",
+                webapp_id,
+            ]
 
-        from .webapp_window import WebAppWindow
+            # Add debug flag if in debug mode
+            from ..utils.logger import Logger
+            if Logger.is_debug_mode():
+                cmd.append("--debug")
 
-        webapp_window = WebAppWindow(
-            application=self.get_application(),
-            webapp=webapp,
-            settings=settings,
-            webapp_manager=self.webapp_manager,
-            profile_manager=self.profile_manager,
-            on_window_closed=self._on_webapp_window_closed,
-        )
-        self.webapp_windows[webapp_id] = webapp_window
-        webapp_window.present()
-        logger.debug(f"WebApp window opened for {webapp_id}")
-        return webapp_window
+            # Start subprocess (don't wait for it)
+            process = subprocess.Popen(
+                cmd,
+                start_new_session=True,  # Detach from parent process
+                stdout=subprocess.DEVNULL if not Logger.is_debug_mode() else None,
+                stderr=subprocess.DEVNULL if not Logger.is_debug_mode() else None,
+            )
+
+            logger.info(f"Webapp launched in separate process (PID: {process.pid})")
+
+        except Exception as e:
+            logger.error(f"Failed to launch webapp in separate process: {e}", exc_info=True)
 
     def _on_settings_clicked(self, button: Gtk.Button, webapp_id: str) -> None:
         """Handle settings button clicked.
@@ -360,7 +376,7 @@ class MainWindow(Adw.ApplicationWindow):
         dialog = AddWebAppDialog(
             self, self.webapp_manager, webapp=webapp, on_saved=self._load_webapps
         )
-        dialog.present()
+        dialog.present(self)
 
     def _on_delete_clicked(self, button: Gtk.Button, webapp_id: str) -> None:
         """Handle delete button clicked.
@@ -394,9 +410,7 @@ class MainWindow(Adw.ApplicationWindow):
             if response == "delete":
                 try:
                     self.webapp_manager.delete_webapp(webapp_id)
-                    window = self.webapp_windows.pop(webapp_id, None)
-                    if window is not None:
-                        window.destroy()
+                    self.close_webapp(webapp_id)
                     logger.info(f"WebApp deleted: {webapp_id}")
                     # Refresh list
                     self._load_webapps()
@@ -407,8 +421,16 @@ class MainWindow(Adw.ApplicationWindow):
         dialog.present(self)
 
 
-    def _on_webapp_window_closed(self, webapp_id: str) -> None:
-        """Remove cached window when it is destroyed."""
-        if webapp_id in self.webapp_windows:
-            del self.webapp_windows[webapp_id]
-            logger.debug(f"WebApp window removed from registry: {webapp_id}")
+    def close_webapp(self, webapp_id: str) -> bool:
+        """Close webapp (webapps now run in separate processes)."""
+        logger.info(f"Request to close webapp: {webapp_id}")
+        try:
+            closed = self.webapp_manager.close_running_webapp(webapp_id)
+            if closed:
+                logger.debug("Signal enviado para encerrar webapp %s", webapp_id)
+            else:
+                logger.debug("Nenhum processo ativo encontrado para %s", webapp_id)
+            return closed
+        except Exception as exc:
+            logger.error("Erro ao tentar fechar webapp %s: %s", webapp_id, exc)
+            return False

@@ -38,6 +38,7 @@ class _CLIOptions:
     show_preferences: bool = False
     show_main_window: bool = False
     quit: bool = False
+    close_webapp_id: Optional[str] = None
 
 
 class WebAppsApplication(Adw.Application):
@@ -143,10 +144,16 @@ class WebAppsApplication(Adw.Application):
         open_webapp_action = Gio.SimpleAction.new("open-webapp", GLib.VariantType.new("s"))
         open_webapp_action.connect("activate", self._on_open_webapp_action)
         self.add_action(open_webapp_action)
+        logger.debug("Action added: open-webapp")
 
         show_main_action = Gio.SimpleAction.new("show-main", None)
         show_main_action.connect("activate", self._on_show_main_action)
         self.add_action(show_main_action)
+
+        close_webapp_action = Gio.SimpleAction.new("close-webapp", GLib.VariantType.new("s"))
+        close_webapp_action.connect("activate", self._on_close_webapp_action)
+        self.add_action(close_webapp_action)
+        logger.debug("Action added: close-webapp")
 
         # About action
         about_action = Gio.SimpleAction.new("about", None)
@@ -213,6 +220,11 @@ class WebAppsApplication(Adw.Application):
             self.quit()
             return 0
 
+        if cli_options.close_webapp_id:
+            if self.webapp_manager and cli_options.close_webapp_id:
+                self.webapp_manager.close_running_webapp(cli_options.close_webapp_id)
+            return 0
+
         if cli_options.webapp_id and not cli_options.show_main_window:
             self._suppress_main_window = True
             self._cli_launch_requested = True
@@ -251,6 +263,7 @@ class WebAppsApplication(Adw.Application):
         parser.add_argument("--preferences", action="store_true")
         parser.add_argument("--show-main-window", action="store_true")
         parser.add_argument("--quit", action="store_true")
+        parser.add_argument("--close-webapp", dest="close_webapp_id")
 
         try:
             namespace, _ = parser.parse_known_args(args)
@@ -264,6 +277,7 @@ class WebAppsApplication(Adw.Application):
             show_preferences=namespace.preferences,
             show_main_window=namespace.show_main_window,
             quit=namespace.quit,
+            close_webapp_id=namespace.close_webapp_id,
         )
 
     def _launch_webapp_from_cli(self, webapp_id: str, new_window: bool) -> bool:
@@ -302,6 +316,15 @@ class WebAppsApplication(Adw.Application):
         dialog = PreferencesDialog(self.main_window, self)
         dialog.present()
         return GLib.SOURCE_REMOVE
+
+    def _on_close_webapp_action(self, action: Gio.SimpleAction, parameter: GLib.Variant) -> None:
+        """Handle external request to close a specific webapp window."""
+        if not parameter:
+            return
+        webapp_id = parameter.get_string()
+        logger.info("Action close-webapp for %s", webapp_id)
+        if self.webapp_manager:
+            self.webapp_manager.close_running_webapp(webapp_id)
 
     def _on_open_webapp_action(self, action: Gio.SimpleAction, parameter: GLib.Variant) -> None:
         """Handle external request to open a webapp window."""

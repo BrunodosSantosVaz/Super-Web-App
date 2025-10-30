@@ -21,6 +21,7 @@ class Logger:
     """
 
     _instance: Optional[logging.Logger] = None
+    _debug_mode: bool = False
 
     @classmethod
     def get_logger(cls, name: str = "webapps-manager") -> logging.Logger:
@@ -92,10 +93,20 @@ class Logger:
         Args:
             enabled: True to enable debug logging on console
         """
+        cls._debug_mode = enabled
         if cls._instance:
             for handler in cls._instance.handlers:
                 if isinstance(handler, logging.StreamHandler):
                     handler.setLevel(logging.DEBUG if enabled else logging.INFO)
+
+    @classmethod
+    def is_debug_mode(cls) -> bool:
+        """Check if debug mode is enabled.
+
+        Returns:
+            True if debug mode is enabled
+        """
+        return cls._debug_mode
 
 
 # Convenience functions

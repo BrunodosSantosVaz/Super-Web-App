@@ -38,6 +38,8 @@ class TrayManager:
         quit_label: str,
         open_cmd: List[str],
         quit_cmd: List[str],
+        *,
+        force: bool = False,
     ) -> None:
         if not self._available:
             return
@@ -52,7 +54,7 @@ class TrayManager:
             "quit_cmd": quit_cmd,
         }
 
-        if self._config == config and self._process and self._process.poll() is None:
+        if (not force) and self._config == config and self._process and self._process.poll() is None:
             return
 
         self._spawn(config)

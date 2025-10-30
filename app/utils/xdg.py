@@ -5,11 +5,35 @@ following the freedesktop.org Base Directory specification.
 """
 
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
 # Application ID following reverse DNS notation
 APP_ID = "br.com.infinity.webapps"
+
+_ID_SANITIZE_PATTERN = re.compile(r"[^A-Za-z0-9_]")
+
+
+def build_app_instance_suffix(webapp_id: str) -> str:
+    """Return a D-Bus safe suffix for per-webapp identifiers."""
+    sanitized = _ID_SANITIZE_PATTERN.sub("_", webapp_id)
+    return f"webapp_{sanitized}"
+
+
+def build_app_instance_id(webapp_id: str) -> str:
+    """Return the full application ID used for standalone webapps."""
+    return f"{APP_ID}.{build_app_instance_suffix(webapp_id)}"
+
+
+def build_desktop_filename(webapp_id: str) -> str:
+    """Return the .desktop filename for a webapp (without path)."""
+    return f"{build_app_instance_id(webapp_id)}.desktop"
+
+
+def build_icon_filename(webapp_id: str) -> str:
+    """Return the icon filename (PNG) for a webapp."""
+    return f"{build_app_instance_id(webapp_id)}.png"
 
 
 class XDGDirectories:
@@ -81,6 +105,18 @@ class XDGDirectories:
         runtime_dir = Path(base) / APP_ID
         runtime_dir.mkdir(parents=True, exist_ok=True)
         return runtime_dir
+
+    @classmethod
+    def get_runtime_sessions_dir(cls) -> Path:
+        """Directory used to track runtime session metadata."""
+        sessions_dir = cls.get_runtime_dir() / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        return sessions_dir
+
+    @classmethod
+    def get_webapp_pid_file(cls, webapp_id: str) -> Path:
+        """Return control file path that stores the PID of a running webapp."""
+        return cls.get_runtime_sessions_dir() / f"{webapp_id}.pid"
 
     @classmethod
     def get_database_path(cls) -> Path:
@@ -232,8 +268,7 @@ class XDGDirectories:
         desktop_dir = cls.get_user_desktop_dir()
         if not desktop_dir:
             return None
-
-        return desktop_dir / f"{APP_ID}.{webapp_id}.desktop"
+        return desktop_dir / build_desktop_filename(webapp_id)
 
     @classmethod
     def get_launcher_script_path(cls, webapp_id: str) -> Path:
@@ -250,7 +285,7 @@ class XDGDirectories:
         Returns:
             Path to .desktop file
         """
-        return cls.get_applications_dir() / f"{APP_ID}.{webapp_id}.desktop"
+        return cls.get_applications_dir() / build_desktop_filename(webapp_id)
 
     @staticmethod
     def is_flatpak() -> bool:

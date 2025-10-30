@@ -13,13 +13,13 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("WebKit", "6.0")
-from gi.repository import Adw, Gtk, WebKit
+from gi.repository import Adw, GLib, GObject, Gtk, WebKit, Gdk, GdkPixbuf
 
 from ..core.webapp_manager import WebAppManager
 from ..data.models import WebApp, WebAppSettings
 from ..utils.i18n import gettext as _, subscribe as i18n_subscribe, unsubscribe as i18n_unsubscribe
 from ..utils.logger import get_logger
-from ..utils.xdg import APP_ID
+from ..utils.xdg import build_app_instance_id
 from ..webengine.popup_handler import PopupHandler
 from ..webengine.profile_manager import ProfileManager
 from ..webengine.webview_manager import WebViewManager
@@ -59,10 +59,29 @@ class WebAppWindow(Adw.ApplicationWindow):
         self.profile_manager = profile_manager
         self._on_window_closed = on_window_closed
         self.tray_manager = TrayManager() if APP_INDICATOR_AVAILABLE else None
+        self._app_instance_id = build_app_instance_id(webapp.id)
 
         # Set window properties
         self.set_title(webapp.name)
         self.set_default_size(settings.window_width, settings.window_height)
+
+        # Set unique WM_CLASS for this webapp window to separate from main app
+        # This helps compositor distinguish this webapp from the main app and other webapps
+        webapp_wm_class = self._app_instance_id
+
+        # Try to set WM_CLASS for X11 (doesn't work in Wayland)
+        try:
+            from gi.repository import Gdk
+            display = Gdk.Display.get_default()
+            if display:
+                # Set startup ID to help window manager
+                startup_id = f"{webapp_wm_class}_{webapp.id}"
+                logger.debug(f"Setting webapp window class: {webapp_wm_class}")
+        except Exception as e:
+            logger.debug(f"Could not set WM_CLASS: {e}")
+
+        # Set window icon from webapp icon
+        self._apply_window_icon()
 
         if settings.window_x is not None and settings.window_y is not None:
             # Note: GTK4 doesn't have move(), position is managed by compositor
@@ -70,16 +89,39 @@ class WebAppWindow(Adw.ApplicationWindow):
 
         self._build_ui()
         self._load_webapp()
-        self._init_tray_icon()
+
+        # Delay tray icon initialization to ensure DBus actions are fully registered
+        GLib.timeout_add(1500, self._init_tray_icon)
 
         # Connect close signal to save window state
         self.connect("close-request", self._on_close_request)
+        self.connect("notify::minimized", self._on_notify_minimized)
 
         logger.info(f"WebAppWindow created for {webapp.name}")
         self._language_subscription = None
         self._language_subscription = i18n_subscribe(self._on_language_changed)
         self._apply_translations()
         self.connect("destroy", self._on_destroy)
+
+    def _apply_window_icon(self) -> None:
+        """Apply current webapp icon to the window."""
+        if not self.webapp.icon_path:
+            return
+
+        icon_path = Path(self.webapp.icon_path)
+        if not icon_path.exists():
+            return
+
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                str(icon_path), 64, 64, True
+            )
+            texture = Gdk.Texture.new_for_pixbuf(pixbuf)
+            self.set_icon_name(None)
+            if hasattr(self, "set_icon_texture"):
+                self.set_icon_texture(texture)
+        except Exception as exc:
+            logger.debug("Could not set window icon: %s", exc)
 
     def _build_ui(self) -> None:
         """Build the window UI."""
@@ -189,41 +231,52 @@ class WebAppWindow(Adw.ApplicationWindow):
 
         logger.debug(f"Loading URL: {self.webapp.url}")
 
-    def _init_tray_icon(self) -> None:
+    def _init_tray_icon(self) -> bool:
         """Create tray icon if the platform supports it and setting enabled."""
         if not self.tray_manager or not self.settings.show_tray:
-            return
+            return False
 
-        if shutil.which("gapplication") is None:
-            logger.warning("gapplication não encontrado; bandeja desativada para este webapp")
-            return
+        self._update_tray_icon()
 
-        icon_path: Optional[str] = None
-        if self.webapp.icon_path and Path(self.webapp.icon_path).exists():
-            icon_path = self.webapp.icon_path
+        return False  # Don't repeat the timeout
 
+    def _tray_commands(self) -> tuple[list[str], list[str]]:
         open_cmd = [
-            "gapplication",
-            "action",
-            APP_ID,
-            "app.open-webapp::s",
+            sys.executable,
+            "-m",
+            "app.main",
+            "--webapp",
             self.webapp.id,
         ]
         quit_cmd = [
-            "gapplication",
-            "action",
-            APP_ID,
-            "app.quit",
+            sys.executable,
+            "-m",
+            "app.main",
+            "--close-webapp",
+            self.webapp.id,
         ]
+        return open_cmd, quit_cmd
+
+    def _update_tray_icon(self) -> None:
+        """Refresh tray icon configuration."""
+        if not self.tray_manager:
+            return
+
+        icon_path = None
+        if self.webapp.icon_path and Path(self.webapp.icon_path).exists():
+            icon_path = self.webapp.icon_path
+
+        open_cmd, quit_cmd = self._tray_commands()
 
         self.tray_manager.ensure_icon(
-            app_id=f"{APP_ID}.{self.webapp.id}",
+            app_id=self._app_instance_id,
             title=self.webapp.name,
             icon_path=icon_path,
             open_label=_("tray.open"),
             quit_label=_("tray.quit"),
             open_cmd=open_cmd,
             quit_cmd=quit_cmd,
+            force=True,
         )
 
     def _on_new_tab(self, webview: WebKit.WebView, uri: str) -> None:
@@ -348,3 +401,25 @@ class WebAppWindow(Adw.ApplicationWindow):
                 self._on_window_closed(self.webapp.id)
             except Exception as exc:
                 logger.debug("Erro ao notificar fechamento de janela: %s", exc)
+
+    def _on_notify_minimized(self, window: Gtk.Window, _param: GObject.ParamSpec) -> None:
+        """Hide window when minimized if tray integration is enabled."""
+        if self.settings.show_tray and self.tray_manager and window.get_property("minimized"):
+            window.hide()
+
+    def refresh_branding(self, webapp: WebApp) -> None:
+        """Refresh window, tray icon, and associated metadata after update."""
+        logger.info("Refreshing branding for webapp %s", webapp.id)
+        self.webapp = webapp
+        self.set_title(webapp.name)
+        self._apply_window_icon()
+
+        updated_settings = self.webapp_manager.get_webapp_settings(webapp.id)
+        if updated_settings:
+            self.settings = updated_settings
+
+        if self.tray_manager:
+            if self.settings.show_tray:
+                self._update_tray_icon()
+            else:
+                self.tray_manager.destroy()
