@@ -84,3 +84,11 @@ test_data/
 # OS
 .DS_Store
 Thumbs.db
+
+plano.txt
+
+.claude/
+
+claude.md
+
+TABS_IMPLEMENTATION.md
