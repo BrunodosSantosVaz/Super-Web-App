@@ -4,7 +4,12 @@ This module provides high-level WebView management including
 creation, configuration, and lifecycle management.
 """
 
+import os
+import shlex
+import shutil
+import subprocess
 from typing import Optional
+from weakref import WeakKeyDictionary
 
 import gi
 
@@ -12,12 +17,88 @@ gi.require_version("WebKit", "6.0")
 from gi.repository import GObject, WebKit
 
 from ..data.models import WebAppSettings
-from ..utils.logger import get_logger
+from ..utils.logger import Logger, get_logger
 from .popup_handler import NavigationHandler, PopupHandler
 from .profile_manager import ProfileManager
 from .security_manager import SecurityManager
 
 logger = get_logger(__name__)
+
+
+class SuperDownloadBridge:
+    """Dispatch downloads to the Super Download application if available."""
+
+    ENV_COMMAND = "SUPER_DOWNLOAD_COMMAND"
+    FLATPAK_APP_ID = "br.com.superdownload"
+    FLATPAK_BINARY = "flatpak"
+    HOST_BINARY = "super-download"
+
+    def __init__(self) -> None:
+        self._cached_command: Optional[list[str]] = None
+
+    def forward(self, uri: str) -> bool:
+        """Forward the download URI to Super Download.
+
+        Returns:
+            True when the hand-off succeeded, False otherwise.
+        """
+        command = self._resolve_command(uri)
+        if not command:
+            logger.warning("Super Download não encontrado; usando fluxo padrão.")
+            return False
+
+        try:
+            stdout = None if Logger.is_debug_mode() else subprocess.DEVNULL
+            stderr = None if Logger.is_debug_mode() else subprocess.DEVNULL
+            subprocess.Popen(
+                command,
+                start_new_session=True,
+                stdout=stdout,
+                stderr=stderr,
+            )
+            logger.info("Download encaminhado para Super Download: %s", uri)
+            return True
+        except FileNotFoundError:
+            logger.error(
+                "Comando configurado para Super Download não encontrado: %s", command[0]
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error(
+                "Falha ao encaminhar download para Super Download: %s", exc, exc_info=True
+            )
+        return False
+
+    def _resolve_command(self, uri: str) -> Optional[list[str]]:
+        if self._cached_command:
+            return [*self._cached_command, uri]
+
+        env_command = os.environ.get(self.ENV_COMMAND)
+        if env_command:
+            try:
+                parsed = shlex.split(env_command)
+                if parsed:
+                    self._cached_command = parsed
+                    return [*parsed, uri]
+            except ValueError as exc:
+                logger.error(
+                    "Variável %s inválida (%s); ignorando.",
+                    self.ENV_COMMAND,
+                    exc,
+                )
+
+        if shutil.which(self.FLATPAK_BINARY):
+            self._cached_command = [
+                self.FLATPAK_BINARY,
+                "run",
+                self.FLATPAK_APP_ID,
+            ]
+            return [*self._cached_command, uri]
+
+        if shutil.which(self.HOST_BINARY):
+            self._cached_command = [self.HOST_BINARY]
+            return [*self._cached_command, uri]
+
+        return None
 
 
 class WebViewManager:
@@ -27,13 +108,19 @@ class WebViewManager:
     managing WebViews with proper configuration.
     """
 
-    def __init__(self, profile_manager: ProfileManager) -> None:
+    def __init__(
+        self,
+        profile_manager: ProfileManager,
+        download_bridge: Optional[SuperDownloadBridge] = None,
+    ) -> None:
         """Initialize WebView manager.
 
         Args:
             profile_manager: ProfileManager instance for webapp profiles
         """
         self.profile_manager = profile_manager
+        self._download_bridge = download_bridge or SuperDownloadBridge()
+        self._use_super_download = WeakKeyDictionary()
         logger.debug("WebViewManager initialized")
 
     def create_webview(
@@ -57,11 +144,15 @@ class WebViewManager:
         SecurityManager.configure_webview_security(webview)
 
         # Setup navigation handling
-        nav_handler = NavigationHandler(settings)
+        nav_handler = NavigationHandler(
+            settings,
+            download_handler=self._handle_download_policy,
+        )
         nav_handler.setup_webview(webview)
 
         # Connect lifecycle signals
         self._connect_signals(webview)
+        self._use_super_download[webview] = settings.use_super_download
 
         logger.debug(f"WebView created and configured for {webapp_id}")
         return webview
@@ -82,6 +173,8 @@ class WebViewManager:
         webview = self.create_webview(webapp_id, settings)
 
         # Setup popup handling
+        if hasattr(popup_handler, "set_download_handler"):
+            popup_handler.set_download_handler(self._handle_popup_download)
         popup_handler.setup_webview(webview)
 
         return webview
@@ -212,11 +305,47 @@ class WebViewManager:
             webview: WebView that started the download
             download: Download object
         """
-        uri = download.get_request().get_uri()
-        logger.info(f"Download started: {uri}")
+        uri_request = download.get_request()
+        uri = uri_request.get_uri() if uri_request else None
+        logger.info("Download iniciado: %s", uri or "<desconhecido>")
 
-        # TODO: Setup download handling (progress, completion, etc)
-        # For now, let WebKit handle it with default behavior
+        if not uri:
+            logger.debug("Download sem URI detectada; mantendo fluxo padrão do WebKit.")
+            return
+
+        if not self._forward_download(webview, uri):
+            return
+
+        logger.debug("Cancelando download interno do WebKit após encaminhamento.")
+        download.cancel()
+
+    def _handle_download_policy(self, webview: WebKit.WebView, uri: str) -> bool:
+        """Handle download interception triggered by navigation policy."""
+        logger.info("Download solicitado por política: %s", uri or "<desconhecido>")
+        if not uri:
+            return False
+
+        forwarded = self._forward_download(webview, uri)
+        if forwarded:
+            logger.debug("Bloqueando download interno após encaminhamento via política.")
+        return forwarded
+
+    def _handle_popup_download(self, webview: WebKit.WebView, uri: str) -> bool:
+        """Handle downloads triggered directly from popup requests."""
+        logger.info("Download solicitado via popup: %s", uri or "<desconhecido>")
+        if not uri:
+            return False
+        return self._forward_download(webview, uri)
+
+    def _forward_download(self, webview: WebKit.WebView, uri: str) -> bool:
+        """Forward download to Super Download if enabled for this webview."""
+        if not self._use_super_download.get(webview, False):
+            logger.debug(
+                "Super Download desativado para este webapp; mantendo fluxo padrão."
+            )
+            return False
+
+        return self._download_bridge.forward(uri)
 
     def suspend_webview(self, webview: WebKit.WebView) -> None:
         """Suspend a WebView to save resources.

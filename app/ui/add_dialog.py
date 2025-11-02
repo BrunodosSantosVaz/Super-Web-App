@@ -202,6 +202,10 @@ class AddWebAppDialog(Adw.Dialog):
         self.tray_switch.set_active(False)
         system_group.add(self.tray_switch)
 
+        # Use Super Download integration
+        self.super_download_switch = Adw.SwitchRow()
+        self.super_download_switch.set_active(False)
+        system_group.add(self.super_download_switch)
 
         content_box.append(system_group)
 
@@ -246,6 +250,8 @@ class AddWebAppDialog(Adw.Dialog):
         self.notif_switch.set_subtitle(_("dialog.system.allow_notifications_desc"))
         self.tray_switch.set_title(_("dialog.system.show_tray"))
         self.tray_switch.set_subtitle(_("dialog.system.show_tray_desc"))
+        self.super_download_switch.set_title(_("dialog.system.use_super_download"))
+        self.super_download_switch.set_subtitle(_("dialog.system.use_super_download_desc"))
 
         selected = self.category_row.get_selected()
         self.categories_list = Gtk.StringList()
@@ -290,6 +296,7 @@ class AddWebAppDialog(Adw.Dialog):
             self.popups_switch.set_active(settings.allow_popups)
             self.notif_switch.set_active(settings.enable_notif)
             self.tray_switch.set_active(settings.show_tray)
+            self.super_download_switch.set_active(settings.use_super_download)
 
     def _on_language_changed(self, _language: str) -> None:
         """React to global language changes."""
@@ -715,6 +722,7 @@ class AddWebAppDialog(Adw.Dialog):
                 new_settings.allow_popups = self.popups_switch.get_active()
                 new_settings.enable_notif = self.notif_switch.get_active()
                 new_settings.show_tray = self.tray_switch.get_active()
+                new_settings.use_super_download = self.super_download_switch.get_active()
                 self.webapp_manager.update_webapp_settings(new_settings)
 
                 icon_path = self._persist_icon(new_webapp.id)
@@ -747,6 +755,7 @@ class AddWebAppDialog(Adw.Dialog):
                 settings.allow_popups = self.popups_switch.get_active()
                 settings.enable_notif = self.notif_switch.get_active()
                 settings.show_tray = self.tray_switch.get_active()
+                settings.use_super_download = self.super_download_switch.get_active()
                 self.webapp_manager.update_webapp_settings(settings)
 
                 # If icon was fetched, move it to the webapp's final icon path

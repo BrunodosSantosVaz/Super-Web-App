@@ -13,7 +13,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gio, Gtk
+from gi.repository import Adw, Gio, Gtk, Gdk, Pango
 
 from ..core.webapp_manager import WebAppManager
 from ..data.models import WebApp
@@ -22,6 +22,74 @@ from ..utils.logger import get_logger
 from ..webengine.profile_manager import ProfileManager
 
 logger = get_logger(__name__)
+
+_STYLE_PROVIDER: Gtk.CssProvider | None = None
+
+
+def _ensure_styles_loaded() -> None:
+    """Load shared CSS tweaks to align visuals with Super Download."""
+    global _STYLE_PROVIDER
+    if _STYLE_PROVIDER is not None:
+        return
+
+    css = """
+    .super-webapp-search {
+        min-height: 44px;
+        border-radius: 12px;
+        padding: 0 12px;
+        border: 1px solid alpha(@borders, 0.45);
+        background-color: alpha(@view_bg_color, 0.9);
+    }
+
+    .super-webapp-search:focus-within {
+        border-color: alpha(@accent_color, 0.75);
+        box-shadow: 0 0 0 3px alpha(@accent_color, 0.2);
+    }
+
+    .super-webapp-row {
+        padding: 12px;
+        border-radius: 14px;
+        border: 1px solid alpha(@borders, 0.4);
+        background-color: @card_bg_color;
+    }
+
+    .super-webapp-row .image {
+        border-radius: 12px;
+    }
+
+    .super-webapp-button-box button {
+        min-height: 36px;
+        min-width: 36px;
+    }
+
+    .super-webapp-button-box button.destructive-action {
+        background-color: alpha(@destructive_bg_color, 0.55);
+        border-color: alpha(@destructive_bg_color, 0.6);
+        color: @destructive_fg_color;
+    }
+
+    .super-webapp-button-box button.destructive-action:hover {
+        background-color: alpha(@destructive_bg_color, 0.75);
+    }
+
+    .super-webapp-list row {
+        padding: 0;
+        border: none;
+        background-color: transparent;
+    }
+    """
+
+    provider = Gtk.CssProvider()
+    provider.load_from_data(css.encode("utf-8"))
+
+    display = Gdk.Display.get_default()
+    if display is not None:
+        Gtk.StyleContext.add_provider_for_display(
+            display,
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+    _STYLE_PROVIDER = provider
 
 
 class MainWindow(Adw.ApplicationWindow):
@@ -51,12 +119,13 @@ class MainWindow(Adw.ApplicationWindow):
         self.profile_manager = profile_manager
 
         self.set_default_size(900, 600)
+        _ensure_styles_loaded()
 
         # Set application icon
         icon_path = Path(__file__).parent.parent / "data" / "icon.png"
         if icon_path.exists():
             try:
-                from gi.repository import Gdk, GdkPixbuf
+                from gi.repository import GdkPixbuf
                 pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
                     str(icon_path), 48, 48, True
                 )
@@ -78,8 +147,11 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _build_ui(self) -> None:
         """Build the main window UI."""
-        # Create header bar
+        toolbar_view = Adw.ToolbarView()
+        self.set_content(toolbar_view)
+
         header_bar = Adw.HeaderBar()
+        toolbar_view.add_top_bar(header_bar)
 
         # Add button for new webapp
         new_button = Gtk.Button()
@@ -93,13 +165,24 @@ class MainWindow(Adw.ApplicationWindow):
         menu_button.set_icon_name("open-menu-symbolic")
         menu_button.set_menu_model(self._create_menu())
         header_bar.pack_end(menu_button)
+        self.menu_button = menu_button
+
+        title_label = Gtk.Label()
+        title_label.add_css_class("title-4")
+        title_label.set_hexpand(True)
+        title_label.set_xalign(0.5)
+        header_bar.set_title_widget(title_label)
+        self.title_label = title_label
 
         # Main content box
-        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        content_box.set_hexpand(True)
+        content_box.set_vexpand(True)
 
         # Search bar
         self.search_entry = Gtk.SearchEntry()
         self.search_entry.set_hexpand(True)
+        self.search_entry.add_css_class("super-webapp-search")
         self.search_entry.connect("search-changed", self._on_search_changed)
 
         search_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -114,10 +197,14 @@ class MainWindow(Adw.ApplicationWindow):
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_vexpand(True)
         scrolled.set_hexpand(True)
+        scrolled.set_margin_start(12)
+        scrolled.set_margin_end(12)
+        scrolled.set_margin_bottom(12)
 
         # List box for webapps
         self.list_box = Gtk.ListBox()
         self.list_box.add_css_class("boxed-list")
+        self.list_box.add_css_class("super-webapp-list")
         self.list_box.set_selection_mode(Gtk.SelectionMode.NONE)
         self.list_box.connect("row-activated", self._on_row_activated)
 
@@ -130,12 +217,7 @@ class MainWindow(Adw.ApplicationWindow):
         scrolled.set_child(self.list_box)
         content_box.append(scrolled)
 
-        # Toolbar view (combines header and content)
-        toolbar_view = Adw.ToolbarView()
-        toolbar_view.add_top_bar(header_bar)
         toolbar_view.set_content(content_box)
-
-        self.set_content(toolbar_view)
 
     def _create_menu(self) -> Gio.Menu:
         """Create application menu.
@@ -170,21 +252,33 @@ class MainWindow(Adw.ApplicationWindow):
         logger.debug(f"Loaded {len(webapps)} webapps")
         self._apply_translations()
 
-    def _create_webapp_row(self, webapp: WebApp) -> Adw.ActionRow:
+    def _create_webapp_row(self, webapp: WebApp) -> Gtk.ListBoxRow:
         """Create list row for a webapp.
 
         Args:
             webapp: WebApp to create row for
 
         Returns:
-            Adw.ActionRow widget
+            Gtk.ListBoxRow widget
         """
-        row = Adw.ActionRow()
-        row.set_title(webapp.name)
-        row.set_subtitle(webapp.url)
+        row = Gtk.ListBoxRow()
+        row.set_activatable(True)
+        row.set_selectable(False)
+        row.set_margin_top(4)
+        row.set_margin_bottom(4)
 
         # Store webapp ID in row data
         row.webapp_id = webapp.id
+
+        main_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        main_box.add_css_class("super-webapp-row")
+        main_box.add_css_class("card")
+        main_box.set_margin_start(12)
+        main_box.set_margin_end(12)
+        main_box.set_margin_top(8)
+        main_box.set_margin_bottom(8)
+        main_box.set_hexpand(True)
+        row.set_child(main_box)
 
         # Icon
         if webapp.icon_path:
@@ -193,10 +287,29 @@ class MainWindow(Adw.ApplicationWindow):
             icon = Gtk.Image.new_from_icon_name("applications-internet-symbolic")
 
         icon.set_pixel_size(48)
-        row.add_prefix(icon)
+        icon.set_valign(Gtk.Align.CENTER)
+        main_box.append(icon)
+
+        info_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        info_box.set_hexpand(True)
+        main_box.append(info_box)
+
+        name_label = Gtk.Label(label=webapp.name, xalign=0)
+        name_label.add_css_class("title-4")
+        name_label.set_ellipsize(Pango.EllipsizeMode.END)
+        info_box.append(name_label)
+
+        url_label = Gtk.Label(label=webapp.url, xalign=0)
+        url_label.add_css_class("dim-label")
+        url_label.set_ellipsize(Pango.EllipsizeMode.END)
+        url_label.set_wrap(True)
+        info_box.append(url_label)
 
         # Action buttons
         button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        button_box.add_css_class("super-webapp-button-box")
+        button_box.set_valign(Gtk.Align.CENTER)
+        main_box.append(button_box)
 
         # Launch button
         launch_button = Gtk.Button()
@@ -223,13 +336,20 @@ class MainWindow(Adw.ApplicationWindow):
         button_box.append(delete_button)
         row.delete_button = delete_button  # type: ignore[attr-defined]
 
-        row.add_suffix(button_box)
+        for button in (launch_button, settings_button, delete_button):
+            button.set_valign(Gtk.Align.CENTER)
+
+        row.name_label = name_label  # type: ignore[attr-defined]
+        row.url_label = url_label  # type: ignore[attr-defined]
+        row.icon_widget = icon  # type: ignore[attr-defined]
 
         return row
 
     def _apply_translations(self) -> None:
         """Apply translated strings to UI elements."""
         self.set_title(_("app.title"))
+        if hasattr(self, "title_label"):
+            self.title_label.set_label(_("app.title"))
         self.new_button.set_label(_("main.new_webapp"))
         self.search_entry.set_placeholder_text(_("main.search_placeholder"))
         self.status_placeholder.set_title(_("main.status.title"))
@@ -237,7 +357,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         row_widget = self.list_box.get_first_child()
         while row_widget:
-            if isinstance(row_widget, Adw.ActionRow):
+            if isinstance(row_widget, Gtk.ListBoxRow):
                 launch_btn = getattr(row_widget, "launch_button", None)
                 if isinstance(launch_btn, Gtk.Button):
                     launch_btn.set_tooltip_text(_("main.launch.tooltip"))
@@ -286,7 +406,7 @@ class MainWindow(Adw.ApplicationWindow):
             row = self._create_webapp_row(webapp)
             self.list_box.append(row)
 
-    def _on_row_activated(self, list_box: Gtk.ListBox, row: Adw.ActionRow) -> None:
+    def _on_row_activated(self, list_box: Gtk.ListBox, row: Gtk.ListBoxRow) -> None:
         """Handle row activation (double-click or Enter).
 
         Args:

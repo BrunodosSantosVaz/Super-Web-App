@@ -23,6 +23,7 @@ O WebApps Manager é um aplicativo GTK4/libadwaita escrito em Python 3 que trans
 - Execução de cada webapp em processo separado via `app.standalone_webapp`, incluindo registro de PID e integração com a linha de comando (`app/standalone_webapp.py`:21).
 - Integração com o desktop: geração de arquivos `.desktop`, scripts de lançamento e instalação dos ícones dimensionados (48/64/128px) (`app/core/desktop_integration.py`:19).
 - Configurações por webapp para abas, popups, bandeja, permissões de notificação e zoom; idioma global com preferências dedicadas (`app/ui/preferences_dialog.py`:15).
+- Encaminhamento opcional de downloads para o aplicativo **Super Download**: ao ativar esta opção nas configurações do webapp, links de download (inclusive popups e `<a download>`) são enviados automaticamente para o gerenciador de downloads centralizado. Basta manter o Super Download instalado (Flatpak ou sistema) ou configurar `SUPER_DOWNLOAD_COMMAND` com o executável desejado.
 - Bandeja opcional implementada com AppIndicator através de um helper externo para abrir ou fechar o webapp rapidamente (`app/ui/system_tray.py`:15).
 - UI principal em libadwaita com busca em tempo real, ações para lançar/editar/remover e suporte a atalhos (`app/ui/main_window.py`:21).
 - Internacionalização simples em `pt` e `en`, com arquivo de traduções gravado em `~/.config/br.com.infinity.webapps` (`app/utils/i18n.py`:16).

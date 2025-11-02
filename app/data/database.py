@@ -102,9 +102,19 @@ class Database:
                     window_height INTEGER DEFAULT 720,
                     window_x INTEGER,
                     window_y INTEGER,
+                    use_super_download BOOLEAN DEFAULT 0,
                     FOREIGN KEY (webapp_id) REFERENCES webapps(id) ON DELETE CASCADE
                 )
             """)
+
+            # Ensure new columns exist for older installations
+            try:
+                cursor.execute(
+                    "ALTER TABLE webapp_settings ADD COLUMN use_super_download BOOLEAN DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                # Column already exists
+                pass
 
             # Create app_settings table
             cursor.execute("""
@@ -168,8 +178,8 @@ class Database:
                 INSERT INTO webapp_settings
                 (webapp_id, allow_tabs, allow_popups, run_background, show_tray,
                  enable_notif, user_agent, javascript, zoom_level,
-                 window_width, window_height, window_x, window_y)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 window_width, window_height, window_x, window_y, use_super_download)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     settings.webapp_id,
@@ -185,6 +195,7 @@ class Database:
                     settings.window_height,
                     settings.window_x,
                     settings.window_y,
+                    settings.use_super_download,
                 ),
             )
 
@@ -299,7 +310,7 @@ class Database:
                 SET allow_tabs = ?, allow_popups = ?, run_background = ?,
                     show_tray = ?, enable_notif = ?, user_agent = ?,
                     javascript = ?, zoom_level = ?, window_width = ?,
-                    window_height = ?, window_x = ?, window_y = ?
+                    window_height = ?, window_x = ?, window_y = ?, use_super_download = ?
                 WHERE webapp_id = ?
                 """,
                 (
@@ -315,6 +326,7 @@ class Database:
                     settings.window_height,
                     settings.window_x,
                     settings.window_y,
+                    settings.use_super_download,
                     settings.webapp_id,
                 ),
             )
@@ -489,6 +501,9 @@ class Database:
             window_height=int(row["window_height"]),
             window_x=int(row["window_x"]) if row["window_x"] else None,
             window_y=int(row["window_y"]) if row["window_y"] else None,
+            use_super_download=bool(
+                row["use_super_download"] if "use_super_download" in row.keys() else 0
+            ),
         )
 
     def close(self) -> None:

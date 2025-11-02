@@ -71,6 +71,7 @@ class WebAppSettings:
         window_height: Last known window height
         window_x: Last known window X position
         window_y: Last known window Y position
+        use_super_download: Forward downloads to Super Download when enabled
     """
 
     webapp_id: str
@@ -86,6 +87,7 @@ class WebAppSettings:
     window_height: int = 720
     window_x: Optional[int] = None
     window_y: Optional[int] = None
+    use_super_download: bool = False
 
     def __post_init__(self) -> None:
         """Validate settings after initialization."""

@@ -5,8 +5,6 @@ This module provides the window that displays a webapp using WebKit WebView.
 
 from pathlib import Path
 from typing import Callable, Optional
-import sys
-import shutil
 
 import gi
 
@@ -23,7 +21,7 @@ from ..utils.xdg import build_app_instance_id
 from ..webengine.popup_handler import PopupHandler
 from ..webengine.profile_manager import ProfileManager
 from ..webengine.webview_manager import WebViewManager
-from .system_tray import APP_INDICATOR_AVAILABLE, TrayManager
+from .system_tray import TrayIndicator
 from .tab_manager import TabManager
 
 logger = get_logger(__name__)
@@ -59,7 +57,8 @@ class WebAppWindow(Adw.ApplicationWindow):
         self.webapp_manager = webapp_manager
         self.profile_manager = profile_manager
         self._on_window_closed = on_window_closed
-        self.tray_manager = TrayManager() if APP_INDICATOR_AVAILABLE else None
+        self.tray_indicator: Optional[TrayIndicator] = None
+        self._force_close = False
         self._app_instance_id = build_app_instance_id(webapp.id)
         self.tab_manager = None  # Will be initialized if tabs are enabled
 
@@ -211,8 +210,8 @@ class WebAppWindow(Adw.ApplicationWindow):
             if page and page.get_loading():
                 page.set_title(_("webapp.tab.loading"))
 
-        if self.tray_manager:
-            self.tray_manager.refresh_labels(_("tray.open"), _("tray.quit"))
+        if self.tray_indicator and self.tray_indicator.available:
+            self.tray_indicator.update_labels(_("tray.open"), _("tray.quit"))
 
     def _load_webapp(self) -> None:
         """Load the webapp URL in WebView."""
@@ -281,52 +280,68 @@ class WebAppWindow(Adw.ApplicationWindow):
             logger.debug(f"Loaded webapp without tabs: {self.webapp.url}")
 
     def _init_tray_icon(self) -> bool:
-        """Create tray icon if the platform supports it and setting enabled."""
-        if not self.tray_manager or not self.settings.show_tray:
+        """Create tray icon if enabled for this webapp."""
+        if not self.settings.show_tray:
             return False
 
         self._update_tray_icon()
-
-        return False  # Don't repeat the timeout
-
-    def _tray_commands(self) -> tuple[list[str], list[str]]:
-        open_cmd = [
-            sys.executable,
-            "-m",
-            "app.main",
-            "--webapp",
-            self.webapp.id,
-        ]
-        quit_cmd = [
-            sys.executable,
-            "-m",
-            "app.main",
-            "--close-webapp",
-            self.webapp.id,
-        ]
-        return open_cmd, quit_cmd
+        return False
 
     def _update_tray_icon(self) -> None:
         """Refresh tray icon configuration."""
-        if not self.tray_manager:
+        self._ensure_tray_indicator()
+        if self.tray_indicator and self.tray_indicator.available:
+            self.tray_indicator.update_title(self.webapp.name)
+            self.tray_indicator.update_icon(self._tray_icon_name())
+            self.tray_indicator.update_labels(_("tray.open"), _("tray.quit"))
+
+    def _ensure_tray_indicator(self) -> None:
+        """Create StatusNotifierItem indicator if needed."""
+        if not self.settings.show_tray:
             return
 
-        icon_path = None
-        if self.webapp.icon_path and Path(self.webapp.icon_path).exists():
-            icon_path = self.webapp.icon_path
+        if self.tray_indicator and self.tray_indicator.available:
+            return
 
-        open_cmd, quit_cmd = self._tray_commands()
+        if self.tray_indicator:
+            self.tray_indicator.destroy()
+            self.tray_indicator = None
 
-        self.tray_manager.ensure_icon(
+        indicator = TrayIndicator(
             app_id=self._app_instance_id,
             title=self.webapp.name,
-            icon_path=icon_path,
+            icon_name=self._tray_icon_name(),
             open_label=_("tray.open"),
             quit_label=_("tray.quit"),
-            open_cmd=open_cmd,
-            quit_cmd=quit_cmd,
-            force=True,
+            on_activate=self._on_tray_activate,
+            on_quit=self._on_tray_quit,
         )
+
+        if indicator.available:
+            self.tray_indicator = indicator
+        else:
+            indicator.destroy()
+            self.tray_indicator = None
+
+    def _tray_icon_name(self) -> str:
+        """Return icon name registered for this webapp."""
+        if self.webapp.icon_path and Path(self.webapp.icon_path).exists():
+            return self._app_instance_id
+        return "applications-internet"
+
+    def _on_tray_activate(self) -> None:
+        """Present window when tray icon activated."""
+        self.set_visible(True)
+        self.present()
+
+    def _on_tray_quit(self) -> None:
+        """Exit webapp when Quit selected from tray."""
+        self._force_close = True
+        app = self.get_application()
+        if app:
+            app.quit()
+        else:
+            self.close()
 
     def _on_new_tab_clicked(self, button: Gtk.Button) -> None:
         """Handle new tab button clicked.
@@ -442,7 +457,11 @@ class WebAppWindow(Adw.ApplicationWindow):
 
         logger.debug(f"Window state saved for {self.webapp.name}")
 
-        if self.tray_manager and self.settings.show_tray:
+        if self._force_close:
+            self._force_close = False
+            return False
+
+        if self.settings.show_tray and self.tray_indicator and self.tray_indicator.available:
             self.hide()
             return True
 
@@ -459,8 +478,9 @@ class WebAppWindow(Adw.ApplicationWindow):
             i18n_unsubscribe(self._language_subscription)
         if self.tab_manager:
             self.tab_manager.cleanup()
-        if self.tray_manager:
-            self.tray_manager.destroy()
+        if self.tray_indicator:
+            self.tray_indicator.destroy()
+            self.tray_indicator = None
         if self._on_window_closed:
             try:
                 self._on_window_closed(self.webapp.id)
@@ -469,7 +489,12 @@ class WebAppWindow(Adw.ApplicationWindow):
 
     def _on_notify_minimized(self, window: Gtk.Window, _param: GObject.ParamSpec) -> None:
         """Hide window when minimized if tray integration is enabled."""
-        if self.settings.show_tray and self.tray_manager and window.get_property("minimized"):
+        if (
+            self.settings.show_tray
+            and self.tray_indicator
+            and self.tray_indicator.available
+            and window.get_property("minimized")
+        ):
             window.hide()
 
     def refresh_branding(self, webapp: WebApp) -> None:
@@ -483,8 +508,8 @@ class WebAppWindow(Adw.ApplicationWindow):
         if updated_settings:
             self.settings = updated_settings
 
-        if self.tray_manager:
-            if self.settings.show_tray:
-                self._update_tray_icon()
-            else:
-                self.tray_manager.destroy()
+        if self.settings.show_tray:
+            self._update_tray_icon()
+        elif self.tray_indicator:
+            self.tray_indicator.destroy()
+            self.tray_indicator = None
