@@ -4,11 +4,18 @@ This module provides high-level WebView management including
 creation, configuration, and lifecycle management.
 """
 
+import base64
+import binascii
+import json
 import os
 import shlex
 import shutil
 import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote, urlparse
+from uuid import uuid4
 from weakref import WeakKeyDictionary
 
 import gi
@@ -18,11 +25,93 @@ from gi.repository import GObject, WebKit
 
 from ..data.models import WebAppSettings
 from ..utils.logger import Logger, get_logger
+from ..utils.validators import sanitize_filename
+from ..utils.xdg import XDGDirectories
 from .popup_handler import NavigationHandler, PopupHandler
 from .profile_manager import ProfileManager
 from .security_manager import SecurityManager
 
 logger = get_logger(__name__)
+
+_frames_enum = getattr(WebKit, "UserContentInjectedFrames", None)
+if _frames_enum is not None and hasattr(_frames_enum, "ALL_FRAMES") and not hasattr(_frames_enum, "ALL"):
+    setattr(_frames_enum, "ALL", _frames_enum.ALL_FRAMES)
+
+_injection_enum = getattr(WebKit, "UserScriptInjectionTime", None)
+if _injection_enum is not None and hasattr(_injection_enum, "START") and not hasattr(_injection_enum, "DOCUMENT_START"):
+    setattr(_injection_enum, "DOCUMENT_START", _injection_enum.START)
+
+
+@dataclass(frozen=True)
+class BlobDownloadPayload:
+    file_path: str
+    filename: str
+    origin_url: Optional[str] = None
+    mime_type: Optional[str] = None
+    source_app: Optional[str] = None
+
+
+BLOB_CAPTURE_JS = """
+(function () {
+  const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.superDownload;
+  if (!handler || typeof handler.postMessage !== "function") {
+    return;
+  }
+
+  const fetchBlobAndSend = async (href, suggestedName) => {
+    try {
+      const response = await fetch(href);
+      const blob = await response.blob();
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          handler.postMessage({
+            type: "blob-download",
+            href,
+            filename: suggestedName || null,
+            mimeType: blob.type || "",
+            dataUrl: reader.result,
+          });
+        } catch (error) {
+          console.error("superDownload: failed to post message", error);
+        }
+      };
+      reader.readAsDataURL(blob);
+    } catch (error) {
+      console.error("superDownload: failed to fetch blob", error);
+    }
+  };
+
+  const shouldIntercept = (anchor) => {
+    if (!anchor) {
+      return false;
+    }
+    const href = anchor.getAttribute("href") || "";
+    if (!href.startsWith("blob:")) {
+      return false;
+    }
+    return anchor.hasAttribute("download") || anchor.getAttribute("download") !== null;
+  };
+
+  document.addEventListener(
+    "click",
+    (event) => {
+      const anchor = event.target && event.target.closest ? event.target.closest("a") : null;
+      if (!shouldIntercept(anchor)) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const suggestedName = anchor.getAttribute("download") || anchor.textContent || null;
+      fetchBlobAndSend(anchor.href, suggestedName);
+    },
+    true
+  );
+})();
+"""
 
 
 class SuperDownloadBridge:
@@ -42,11 +131,69 @@ class SuperDownloadBridge:
         Returns:
             True when the hand-off succeeded, False otherwise.
         """
-        command = self._resolve_command(uri)
-        if not command:
+        base = self._get_command_base()
+        if not base:
             logger.warning("Super Download não encontrado; usando fluxo padrão.")
             return False
 
+        command = [*base, uri]
+        return self._spawn(command, f"Download encaminhado para Super Download: {uri}")
+
+    def forward_blob(self, payload: BlobDownloadPayload) -> bool:
+        base = self._get_command_base()
+        if not base:
+            logger.warning(
+                "Super Download não encontrado; fluxo padrão aplicado ao blob %s",
+                payload.filename,
+            )
+            return False
+
+        command: list[str] = [
+            *base,
+            "--ingest-file",
+            payload.file_path,
+            "--filename",
+            payload.filename,
+        ]
+
+        if payload.origin_url:
+            command.extend(["--origin-url", payload.origin_url])
+        if payload.mime_type:
+            command.extend(["--mime-type", payload.mime_type])
+        if payload.source_app:
+            command.extend(["--source-app", payload.source_app])
+
+        return self._spawn(command, f"Download blob encaminhado para Super Download: {payload.filename}")
+
+    def _get_command_base(self) -> Optional[list[str]]:
+        if self._cached_command:
+            return self._cached_command
+
+        env_command = os.environ.get(self.ENV_COMMAND)
+        if env_command:
+            try:
+                parsed = shlex.split(env_command)
+                if parsed:
+                    self._cached_command = parsed
+                    return self._cached_command
+            except ValueError as exc:
+                logger.error(
+                    "Variável %s inválida (%s); ignorando.",
+                    self.ENV_COMMAND,
+                    exc,
+                )
+
+        if shutil.which(self.FLATPAK_BINARY):
+            self._cached_command = [self.FLATPAK_BINARY, "run", self.FLATPAK_APP_ID]
+            return self._cached_command
+
+        if shutil.which(self.HOST_BINARY):
+            self._cached_command = [self.HOST_BINARY]
+            return self._cached_command
+
+        return None
+
+    def _spawn(self, command: list[str], success_message: str) -> bool:
         try:
             stdout = None if Logger.is_debug_mode() else subprocess.DEVNULL
             stderr = None if Logger.is_debug_mode() else subprocess.DEVNULL
@@ -56,7 +203,7 @@ class SuperDownloadBridge:
                 stdout=stdout,
                 stderr=stderr,
             )
-            logger.info("Download encaminhado para Super Download: %s", uri)
+            logger.info(success_message)
             return True
         except FileNotFoundError:
             logger.error(
@@ -67,38 +214,6 @@ class SuperDownloadBridge:
                 "Falha ao encaminhar download para Super Download: %s", exc, exc_info=True
             )
         return False
-
-    def _resolve_command(self, uri: str) -> Optional[list[str]]:
-        if self._cached_command:
-            return [*self._cached_command, uri]
-
-        env_command = os.environ.get(self.ENV_COMMAND)
-        if env_command:
-            try:
-                parsed = shlex.split(env_command)
-                if parsed:
-                    self._cached_command = parsed
-                    return [*parsed, uri]
-            except ValueError as exc:
-                logger.error(
-                    "Variável %s inválida (%s); ignorando.",
-                    self.ENV_COMMAND,
-                    exc,
-                )
-
-        if shutil.which(self.FLATPAK_BINARY):
-            self._cached_command = [
-                self.FLATPAK_BINARY,
-                "run",
-                self.FLATPAK_APP_ID,
-            ]
-            return [*self._cached_command, uri]
-
-        if shutil.which(self.HOST_BINARY):
-            self._cached_command = [self.HOST_BINARY]
-            return [*self._cached_command, uri]
-
-        return None
 
 
 class WebViewManager:
@@ -121,6 +236,9 @@ class WebViewManager:
         self.profile_manager = profile_manager
         self._download_bridge = download_bridge or SuperDownloadBridge()
         self._use_super_download = WeakKeyDictionary()
+        self._webview_ids: "WeakKeyDictionary[WebKit.WebView, str]" = WeakKeyDictionary()
+        self._user_scripts_installed: "WeakKeyDictionary[WebKit.WebView, bool]" = WeakKeyDictionary()
+        self._message_handlers: "WeakKeyDictionary[WebKit.WebView, int]" = WeakKeyDictionary()
         logger.debug("WebViewManager initialized")
 
     def create_webview(
@@ -153,6 +271,10 @@ class WebViewManager:
         # Connect lifecycle signals
         self._connect_signals(webview)
         self._use_super_download[webview] = settings.use_super_download
+        self._webview_ids[webview] = webapp_id
+
+        if settings.use_super_download:
+            self._install_blob_capture(webview, webapp_id)
 
         logger.debug(f"WebView created and configured for {webapp_id}")
         return webview
@@ -336,6 +458,168 @@ class WebViewManager:
         if not uri:
             return False
         return self._forward_download(webview, uri)
+
+    def _install_blob_capture(self, webview: WebKit.WebView, webapp_id: str) -> None:
+        manager = getattr(webview, "get_user_content_manager", lambda: None)()
+        if manager is None:
+            logger.debug("UserContentManager indisponível; captura de blob ignorada.")
+            return
+
+        if self._user_scripts_installed.get(webview):
+            return
+
+        try:
+            manager.unregister_script_message_handler("superDownload")
+        except Exception:
+            pass
+
+        try:
+            manager.register_script_message_handler("superDownload")
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning("Falha ao registrar handler superDownload: %s", exc)
+            return
+
+        handler_id = manager.connect(
+            "script-message-received::superDownload",
+            self._on_blob_script_message,
+            webview,
+            webapp_id,
+        )
+        self._user_scripts_installed[webview] = True
+        self._message_handlers[webview] = handler_id
+
+        try:
+            script = WebKit.UserScript.new(
+                BLOB_CAPTURE_JS,
+                getattr(WebKit.UserContentInjectedFrames, "ALL_FRAMES", 0),
+                getattr(WebKit.UserScriptInjectionTime, "START", 0),
+                [],
+                [],
+            )
+            manager.add_script(script)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.error(
+                "Falha ao registrar script de captura de blob: %s", exc, exc_info=True
+            )
+            return
+
+        logger.debug("Script de captura de blob instalado para webapp %s", webapp_id)
+
+    def _on_blob_script_message(
+        self,
+        manager: WebKit.UserContentManager,
+        message,
+        webview: WebKit.WebView,
+        webapp_id: str,
+    ) -> None:
+        if not self._use_super_download.get(webview, False):
+            logger.debug("Mensagem de blob recebida, mas Super Download está desativado.")
+            return
+
+        logger.debug(
+            "Mensagem de blob recebida: message=%s webview=%s",
+            type(message).__name__,
+            type(webview).__name__,
+        )
+
+        js_payload_source = message
+        get_js_value = getattr(message, "get_js_value", None)
+        if callable(get_js_value):
+            try:
+                js_payload_source = get_js_value()
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logger.error("Falha ao obter js_value da mensagem de blob: %s", exc, exc_info=True)
+                js_payload_source = None
+        elif hasattr(message, "get_value"):
+            try:
+                js_payload_source = message.get_value()
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logger.error("Falha ao obter value da mensagem de blob: %s", exc, exc_info=True)
+                js_payload_source = None
+
+        if js_payload_source is None:
+            logger.error("Mensagem de blob sem js_value legível.")
+            return
+
+        payload = self._deserialize_blob_message(js_payload_source)
+        if payload is None:
+            return
+
+        data_url = payload.get("dataUrl")
+        if not data_url or not isinstance(data_url, str) or "base64," not in data_url:
+            logger.warning("Mensagem de blob sem dataUrl válido.")
+            return
+
+        base64_data = data_url.split("base64,", 1)[1]
+        binary = self._decode_blob_base64(base64_data)
+        if binary is None:
+            return
+
+        filename_raw = payload.get("filename") or "blob-download"
+        filename = sanitize_filename(filename_raw)
+        origin_url = payload.get("href") or getattr(webview, "get_uri", lambda: None)()
+        mime_type = payload.get("mimeType") or None
+
+        cache_dir = XDGDirectories.get_cache_dir() / "blob-downloads"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        temp_path = cache_dir / f"{uuid4().hex}_{filename}"
+
+        if not self._write_blob_to_path(temp_path, binary):
+            return
+
+        payload_obj = BlobDownloadPayload(
+            file_path=str(temp_path),
+            filename=filename,
+            origin_url=origin_url,
+            mime_type=mime_type,
+            source_app=webapp_id,
+        )
+
+        if self._download_bridge.forward_blob(payload_obj):
+            logger.info("Blob encaminhado para Super Download: %s", filename)
+        else:
+            logger.warning(
+                "Falha ao encaminhar blob %s; arquivo permanece em %s",
+                filename,
+                temp_path,
+            )
+
+    @staticmethod
+    def _decode_blob_base64(data: str) -> Optional[bytes]:
+        try:
+            return base64.b64decode(data, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            logger.error("Falha ao decodificar blob em base64: %s", exc)
+            return None
+
+    @staticmethod
+    def _write_blob_to_path(path: Path, content: bytes) -> bool:
+        try:
+            path.write_bytes(content)
+            return True
+        except OSError as exc:
+            logger.error("Falha ao gravar blob interceptado em %s: %s", path, exc)
+            return False
+
+    @staticmethod
+    def _deserialize_blob_message(js_value) -> Optional[dict]:
+        try:
+            if hasattr(js_value, "to_json"):
+                payload_raw = js_value.to_json(0)
+            elif hasattr(js_value, "to_string"):
+                payload_raw = js_value.to_string()
+            else:
+                logger.error("Objeto JS recebido não suporta serialização.")
+                return None
+            payload = json.loads(payload_raw)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.error("Falha ao decodificar mensagem de blob: %s", exc, exc_info=True)
+            return None
+
+        if not isinstance(payload, dict) or payload.get("type") != "blob-download":
+            logger.debug("Mensagem de blob ignorada (payload inesperado): %s", payload)
+            return None
+        return payload
 
     def _forward_download(self, webview: WebKit.WebView, uri: str) -> bool:
         """Forward download to Super Download if enabled for this webview."""
