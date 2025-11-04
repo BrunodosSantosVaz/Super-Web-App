@@ -1,110 +1,196 @@
 # WebApps Manager
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
+Plataforma desktop para criar e administrar WebApps modernos no Linux com foco em isolamento, integração nativa e produtividade. Construído em **Python 3.11+**, **GTK 4/libadwaita** e **WebKitGTK 6**, o WebApps Manager combina técnicas de navegadores modernos com fluxo de trabalho de aplicativos desktop independentes.
 
-Gerencie seus sites favoritos como aplicativos desktop isolados no Linux, com integração aos padrões do ecossistema GNOME.
+## Índice
+- [Motivação](#motivação)
+- [Principais recursos](#principais-recursos)
+- [Tecnologias e arquitetura](#tecnologias-e-arquitetura)
+- [Compatibilidade de licenças](#compatibilidade-de-licenças)
+- [Requisitos](#requisitos)
+- [Instalação](#instalação)
+  - [Pacotes do sistema](#pacotes-do-sistema)
+  - [Flatpak (experimental)](#flatpak-experimental)
+  - [Código-fonte](#código-fonte)
+- [Como usar](#como-usar)
+  - [Interface principal](#interface-principal)
+  - [Bandeja do sistema](#bandeja-do-sistema)
+  - [Linha de comando](#linha-de-comando)
+  - [Integração com Super Download](#integração-com-super-download)
+- [Configuração e armazenamento](#configuração-e-armazenamento)
+- [Desenvolvimento](#desenvolvimento)
+- [Roadmap](#roadmap)
+- [Licença](#licença)
 
-## Visão Geral
+## Motivação
 
-O WebApps Manager é um aplicativo GTK4/libadwaita escrito em Python 3 que transforma páginas web em aplicações independentes. Cada webapp roda em um processo separado, com perfil WebKit isolado, configurações próprias e atalhos de desktop gerados automaticamente. A aplicação principal mantém um catálogo de webapps em SQLite e oferece ferramentas para criar, editar, iniciar e remover cada entrada.
+As soluções de WebApps existentes atendem bem a casos gerais, mas nenhuma cobria exatamente o fluxo que eu buscava.  
+Eu apreciava:
+- a forma como o **Brave** organiza WebApps com abas independentes;
+- a estética e a gestão do **BigLinux Web Apps**;
+- e o comportamento de minimizar para bandeja do **Teams for Linux**.
 
-## Funcionalidades disponíveis
+Inspirado por elementos de cada um, reuni o que era essencial no meu dia a dia: perfis WebKit isolados, interface moderna, atalhos nativos, abas dinâmicas e um mecanismo confiável para rodar em segundo plano — tudo sem depender dos navegadores já instalados no sistema. O WebApps Manager nasceu dessa necessidade específica e evoluiu para uma ferramenta geral pronta para produção.
 
-- Criação, edição e exclusão de webapps com validação de URL, categorias predefinidas e suporte a ícones personalizados ou baixados automaticamente (`app/ui/add_dialog.py`:52).
-- **Sistema de abas dinâmicas** integrado à barra de título, com comportamento idêntico a navegadores modernos (`app/ui/tab_manager.py`):
-  - Até 10 abas simultâneas por webapp com redimensionamento automático e proporcional
-  - Abas integradas na barra de título (entre botões de navegação e controles da janela)
-  - Títulos dinâmicos que refletem mudanças do `document.title` em tempo real
-  - Botão "+" para criar novas abas e botão "X" para fechar abas individuais
-  - Sempre mantém pelo menos uma aba aberta (cria nova automaticamente ao fechar a última)
-  - Mensagens multilíngues ao atingir o limite de abas (PT/EN)
-- Perfis totalmente isolados por webapp, com diretórios próprios e `WebKit.NetworkSession` dedicado (`app/webengine/profile_manager.py`:48).
-- Execução de cada webapp em processo separado via `app.standalone_webapp`, incluindo registro de PID e integração com a linha de comando (`app/standalone_webapp.py`:21).
-- Integração com o desktop: geração de arquivos `.desktop`, scripts de lançamento e instalação dos ícones dimensionados (48/64/128px) (`app/core/desktop_integration.py`:19).
-- Configurações por webapp para abas, popups, bandeja, permissões de notificação e zoom; idioma global com preferências dedicadas (`app/ui/preferences_dialog.py`:15).
-- Encaminhamento opcional de downloads para o aplicativo **Super Download**: ao ativar esta opção nas configurações do webapp, links de download (inclusive popups e `<a download>`) são enviados automaticamente para o gerenciador de downloads centralizado. Basta manter o Super Download instalado (Flatpak ou sistema) ou configurar `SUPER_DOWNLOAD_COMMAND` com o executável desejado.
-- Bandeja opcional implementada com AppIndicator através de um helper externo para abrir ou fechar o webapp rapidamente (`app/ui/system_tray.py`:15).
-- UI principal em libadwaita com busca em tempo real, ações para lançar/editar/remover e suporte a atalhos (`app/ui/main_window.py`:21).
-- Internacionalização simples em `pt` e `en`, com arquivo de traduções gravado em `~/.config/br.com.infinity.webapps` (`app/utils/i18n.py`:16).
-- Logger central com rotação de arquivos em diretório XDG e modo debug habilitável via parâmetro `--debug` (`app/utils/logger.py`:8, `app/main.py`:24).
+## Principais recursos
 
-## Como implementamos
+- **Catálogo central de WebApps** com criação, edição e exclusão via interface libadwaita.
+- **Abas dinâmicas** com integração à barra de título, limite configurável e títulos em tempo real.
+- **Perfis isolados por WebApp** (cookies, armazenamento e permissões em diretórios dedicados).
+- **Minimização e restauração via bandeja** usando StatusNotifierItem/DBus, com menu para abrir ou encerrar rapidamente.
+- **Instalador desktop automático**: gera arquivos `.desktop`, ícones e scripts de lançamento.
+- **Download helpers**: opção por WebApp para encaminhar downloads ao Super Download ou salvar localmente.
+- **Suporte multilíngue (pt-BR/en)** com preferências persistentes.
+- **Logs, banco SQLite, diretórios XDG** e perfis WebKit tratados automaticamente.
+- **CLI integrada** para lançar WebApps específicos, abrir preferências e fechar instâncias em execução.
 
-A base segue arquitetura em camadas bem definidas:
+## Tecnologias e arquitetura
+
+| Camada | Tecnologia | Responsabilidade |
+| ------ | ---------- | ---------------- |
+| UI | GTK 4 + libadwaita (PyGObject) | Janela principal, diálogos, tabs, bandeja |
+| Core | Python | Regras de negócio, orquestração de WebApps, integração desktop |
+| Web Engine | WebKitGTK 6 | Renderização, perfis isolados, controle de permissões |
+| Dados | SQLite + JSON | Catálogo de WebApps, ajustes de idioma e preferências |
+| Utilidades | requests, BeautifulSoup, Pillow, validators | Captura de metadados, download e tratamento de ícones |
+| Tray | StatusNotifierItem (DBus) | Minimizar/restaurar independente do shell |
+
+Estrutura em camadas (dentro de `app/`):
 
 ```
-┌─────────────────────────────────────┐
-│  UI (GTK4/libadwaita)               │  app/ui
-├─────────────────────────────────────┤
-│  Core (regras de negócio)          │  app/core
-├─────────────────────────────────────┤
-│  WebEngine (WebKitGTK 6)           │  app/webengine
-├─────────────────────────────────────┤
-│  Data (SQLite + perfis WebKit)     │  app/data
-├─────────────────────────────────────┤
-│  Utils (XDG, i18n, logging, etc.)  │  app/utils
-└─────────────────────────────────────┘
+ui/            -> GTK/libadwaita (MainWindow, dialogs, widgets)
+core/          -> WebAppManager, DesktopIntegration, orquestração
+webengine/     -> WebView Manager, ProfileManager, política de segurança
+data/          -> Database, modelos, migrações
+utils/         -> XDG, i18n, logging, helper de downloads
+standalone/    -> Launchers para WebApps isolados
 ```
 
-- A camada `core` coordena banco, perfis e integração com o desktop (`app/core/webapp_manager.py`:19).
-- `webengine` concentra o gerenciamento do `WebContext`, restrições de segurança, manipulação de popups e sessões (`app/webengine/webview_manager.py`:20).
-- A camada de dados usa SQLite com migrações automáticas e mapeamento via dataclasses (`app/data/database.py`:18, `app/data/models.py`:15).
-- Utilitários XDG garantem que dados, perfis e logs sejam gravados nos diretórios corretos do usuário (`app/utils/xdg.py`:13).
+## Compatibilidade de licenças
 
-## Tecnologias
+O projeto é distribuído sob **GNU GPL v3 ou posterior**. Dependências diretas e sua compatibilidade:
 
-- Python 3.11+
-- GTK4 4.12+ e libadwaita 1.5+
-- WebKitGTK 6.0+ via PyGObject 3.46
-- SQLite (módulo padrão) para metadados
-- Requests + BeautifulSoup + Pillow para busca e processamento de ícones
-- AppIndicator3 (libayatana-appindicator) para a bandeja
-- Ferramentas de desenvolvimento configuradas em `pyproject.toml`: pytest, black, flake8, mypy, isort (`pyproject.toml`:35)
+| Pacote | Licença | Compatível com GPLv3? | Observações |
+| ------ | ------- | --------------------- | ----------- |
+| PyGObject | LGPL-2.1-or-later | ✔️ | Linkagem dinâmica permitida por aplicativos GPLv3. |
+| WebKitGTK | LGPL-2.1-or-later | ✔️ | Distribuído como biblioteca do sistema. |
+| requests | Apache-2.0 | ✔️ | Requer preservação de avisos e arquivo NOTICE (já embedado). |
+| beautifulsoup4 | MIT | ✔️ | Permissiva. |
+| Pillow | HPND (PIL license) | ✔️ | Licença permissiva compatível. |
+| validators | MIT | ✔️ | Permissiva. |
 
-## Como executar
+Nenhuma dependência impõe restrições adicionais além das obrigações usuais (manter avisos de copyright/licença).
 
-### Flatpak
+## Requisitos
 
+- Linux com Wayland ou X11 e suporte a GTK 4/libadwaita.
+- Python **3.11** ou **3.12**.
+- WebKitGTK 6 (`gir1.2-webkit-6.0` nos sistemas Debian/Ubuntu).
+- `libayatana-appindicator` não é mais necessário — usamos StatusNotifierItem puro via DBus.
+- Para integração com Super Download: instalar o aplicativo [Super Download](../Super-Download) ou outro comando compatível.
+
+## Instalação
+
+### Pacotes do sistema
+
+Arch/Manjaro:
 ```bash
+sudo pacman -S python gtk4 libadwaita webkitgtk aria2
+```
+
+Ubuntu/Debian:
+```bash
+sudo apt install python3 python3-venv python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-webkit-6.0 \
+                 libayatana-appindicator3-dev sqlite3 aria2
+```
+
+### Flatpak (experimental)
+
+```
 cd flatpak
 flatpak-builder --user --install --force-clean build br.com.infinity.webapps.yml
 flatpak run br.com.infinity.webapps
 ```
 
-### Ambiente de desenvolvimento
+Revise o manifesto para ajustar permissões (acesso ao XDG_CONFIG_HOME, downloads, etc.) conforme sua distribuição.
 
-```bash
-python3 -m venv .venv
+### Código-fonte
+
+```
+git clone https://github.com/seu-usuario/Super-Web-App.git
+cd Super-Web-App
+python -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
 python -m app.main --debug
 ```
 
-Para abrir diretamente um webapp já cadastrado:
+## Como usar
 
-```bash
-python -m app.main --webapp <id-do-webapp>
+### Interface principal
+
+- **Adicionar WebApp**: clique em “Novo WebApp”, informe URL, título, categoria e ícone (pode ser baixado automaticamente).
+- **Abas**: use o botão “+” para novas abas; limite padrão de 10 por WebApp, com ajustes automáticos de largura.
+- **Preferências**: defina idioma, comportamento padrão de downloads, tema escuro/claro (herdado do sistema) e limites de abas.
+- **Logs**: ativar `--debug` exibe mais detalhes no console e em `~/.local/state/br.com.infinity.webapps/log.txt`.
+
+### Bandeja do sistema
+
+O minimizador usa StatusNotifierItem/DBus:
+- Fechar a janela principal oculta a aplicação (continua rodando).
+- O ícone da bandeja permite **Abrir WebApps Manager** ou **Sair**.
+- Disponível nativamente em Plasma, XFCE, Cinnamon, MATE; no GNOME requer extensão *AppIndicator and KStatusNotifierItem Support*.
+
+### Linha de comando
+
+```
+webapps-manager --webapp <id>
+webapps-manager --show-main-window
+webapps-manager --preferences
+webapps-manager --quit
 ```
 
-## Backlog do planejamento inicial
+As ações são roteadas para a instância existente (Gio.Application `HANDLES_COMMAND_LINE`), evitando múltiplos processos.
 
-O documento técnico (`plano.txt`) prevê recursos que ainda não foram implementados e permanecem planejados para versões futuras:
+### Integração com Super Download
 
-- **Gerenciamento granular de notificações**: `NotificationManager` está desenhado, porém a interface de aprovação e a integração com WebKit ainda não estão conectadas (atualmente permissões são negadas por padrão) (`app/webengine/webview_manager.py`:198).
-- **Persistência de abas entre sessões**: o sistema de abas dinâmicas está implementado e funcional, mas a restauração automática das abas ao reabrir o webapp ainda não foi concluída.
-- **Execução em segundo plano**: o campo `run_background` está modelado (`app/data/models.py`), mas o comportamento ainda não está implementado.
-- **Manipulação aprimorada de downloads**: o hook existe na camada WebKit, porém falta UI/fluxo para acompanhar progresso e destino (`app/webengine/webview_manager.py`:214).
-- **Suite de testes automatizados e pipeline CI/CD**: o diretório `tests/` está vazio; as metas de cobertura >80% e validações contínuas ainda não foram iniciadas.
-- **Melhorias planejadas para o sistema de abas**:
-  - Atalhos de teclado (Ctrl+T para nova aba, Ctrl+W para fechar, Ctrl+Tab para alternar)
-  - Arrastar e soltar para reordenar abas
-  - Favicon nas abas (atualização dinâmica via `notify::favicon`)
-  - Menu de contexto (clique direito: fechar, fechar outras, recarregar)
-  - Busca em abas (pesquisar conteúdo em todas as abas abertas)
-- **Funcionalidades planejadas para versões futuras** (seções 23-24 do plano):
-  - v1.5: user-scripts com injeção de JS, bloqueio básico de anúncios, temas customizados e gestos de trackpad.
-  - v2.0: sincronização entre dispositivos, backup/restauração de configurações, sistema de plugins/extensões e suporte completo a PWAs.
-  - v2.5: perfis compartilhados opcionais, modo quiosque, controles parentais e integração com gerenciadores de senhas.
+A aba “Downloads” nas preferências de cada WebApp permite selecionar:
+- **Manter no WebApp** (WebKit padrão),
+- **Abrir automaticamente** (para arquivos suportados),
+- **Encaminhar ao Super Download** (executa `super-download` com a URL e metadados).  
+Também é possível definir o comando customizado via variável `SUPER_DOWNLOAD_COMMAND`.
 
-Esses itens permanecem no backlog e servirão de guia para as próximas iterações do projeto.
+## Configuração e armazenamento
+
+- Configurações globais: `~/.config/br.com.infinity.webapps/config.json`
+- Banco de dados (SQLite): `~/.local/share/br.com.infinity.webapps/webapps.db`
+- Perfis WebKit: `~/.local/share/br.com.infinity.webapps/webapps/<id>`
+- Logs: `~/.local/state/br.com.infinity.webapps/log.txt`
+- Arquivos `.desktop` e ícones: instalados em `~/.local/share/applications` e `~/.local/share/icons/hicolor/*/apps`
+
+## Desenvolvimento
+
+Scripts úteis:
+```
+ruff check app tests
+black app tests
+pytest
+python -m compileall app
+```
+
+O diretório `tests/` contém cenários iniciais para garantir que a infraestrutura de banco e perfis se comporte corretamente (expanda-os conforme adicionar novas features).
+
+## Roadmap
+
+Itens planejados nas próximas versões (vide `plano.txt`):
+- Restauração de abas entre sessões e atalhos avançados (Ctrl+T/Ctrl+W/Ctrl+Tab).
+- Suporte a gestos, user-scripts e temas personalizados.
+- API D-Bus para controle externo e modo quiosque.
+- Sincronização de catálogo e perfis entre máquinas.
+- Monitoramento de downloads com feedback direto na UI.
+
+## Licença
+
+Copyright (C) 2025 Bruno Vaz  
+Distribuído sob **GNU General Public License v3.0 ou posterior**.  
+Inclua os avisos das dependências listadas em [Compatibilidade de licenças](#compatibilidade-de-licenças) ao redistribuir.
