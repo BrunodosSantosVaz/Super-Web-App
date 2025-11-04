@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste de Notificações</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 30px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            margin: 10px 0;
+            font-size: 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        button:hover {
+            background: white;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        button:active {
+            transform: translateY(0);
+        }
+        #status {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            min-height: 60px;
+        }
+        .success {
+            color: #4ade80;
+        }
+        .error {
+            color: #f87171;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔔 Teste de Notificações</h1>
+
+        <button onclick="requestPermission()">1. Solicitar Permissão</button>
+        <button onclick="sendSimpleNotification()">2. Notificação Simples</button>
+        <button onclick="sendNotificationWithBody()">3. Notificação com Corpo</button>
+        <button onclick="sendMultipleNotifications()">4. Múltiplas Notificações</button>
+        <button onclick="checkPermission()">Verificar Status de Permissão</button>
+
+        <div id="status">
+            <p>Status: Aguardando ação...</p>
+        </div>
+    </div>
+
+    <script>
+        function updateStatus(message, isError = false) {
+            const status = document.getElementById('status');
+            status.innerHTML = `<p class="${isError ? 'error' : 'success'}">${message}</p>`;
+        }
+
+        function checkPermission() {
+            if (!("Notification" in window)) {
+                updateStatus("❌ Este navegador não suporta notificações", true);
+                return;
+            }
+
+            const permission = Notification.permission;
+            let message = "";
+
+            switch(permission) {
+                case "granted":
+                    message = "✅ Permissão concedida! Pode enviar notificações.";
+                    break;
+                case "denied":
+                    message = "❌ Permissão negada. Você bloqueou as notificações.";
+                    break;
+                case "default":
+                    message = "⚠️ Permissão não solicitada ainda. Clique em 'Solicitar Permissão'.";
+                    break;
+            }
+
+            updateStatus(message);
+        }
+
+        async function requestPermission() {
+            if (!("Notification" in window)) {
+                updateStatus("❌ Este navegador não suporta notificações", true);
+                return;
+            }
+
+            try {
+                const permission = await Notification.requestPermission();
+
+                if (permission === "granted") {
+                    updateStatus("✅ Permissão concedida! Agora você pode receber notificações.");
+                    // Envia uma notificação de teste
+                    new Notification("Permissão Concedida!", {
+                        body: "Você agora receberá notificações deste webapp.",
+                        icon: "https://via.placeholder.com/128"
+                    });
+                } else if (permission === "denied") {
+                    updateStatus("❌ Permissão negada. As notificações foram bloqueadas.", true);
+                } else {
+                    updateStatus("⚠️ Permissão não foi concedida.", true);
+                }
+            } catch (error) {
+                updateStatus("❌ Erro ao solicitar permissão: " + error.message, true);
+            }
+        }
+
+        function sendSimpleNotification() {
+            if (Notification.permission !== "granted") {
+                updateStatus("❌ Você precisa conceder permissão primeiro!", true);
+                return;
+            }
+
+            try {
+                new Notification("Olá! 👋");
+                updateStatus("✅ Notificação simples enviada!");
+            } catch (error) {
+                updateStatus("❌ Erro ao enviar notificação: " + error.message, true);
+            }
+        }
+
+        function sendNotificationWithBody() {
+            if (Notification.permission !== "granted") {
+                updateStatus("❌ Você precisa conceder permissão primeiro!", true);
+                return;
+            }
+
+            try {
+                new Notification("Super WebApp", {
+                    body: "Esta é uma notificação de teste com corpo de texto. As notificações estão funcionando perfeitamente! 🎉",
+                    icon: "https://via.placeholder.com/128",
+                    tag: "test-notification"
+                });
+                updateStatus("✅ Notificação com corpo enviada!");
+            } catch (error) {
+                updateStatus("❌ Erro ao enviar notificação: " + error.message, true);
+            }
+        }
+
+        function sendMultipleNotifications() {
+            if (Notification.permission !== "granted") {
+                updateStatus("❌ Você precisa conceder permissão primeiro!", true);
+                return;
+            }
+
+            try {
+                const notifications = [
+                    { title: "Primeira Notificação", body: "Esta é a primeira notificação 1️⃣" },
+                    { title: "Segunda Notificação", body: "Esta é a segunda notificação 2️⃣" },
+                    { title: "Terceira Notificação", body: "Esta é a terceira notificação 3️⃣" }
+                ];
+
+                notifications.forEach((notif, index) => {
+                    setTimeout(() => {
+                        new Notification(notif.title, {
+                            body: notif.body,
+                            icon: "https://via.placeholder.com/128",
+                            tag: `multi-notif-${index}`
+                        });
+                    }, index * 1000); // 1 segundo de intervalo entre cada uma
+                });
+
+                updateStatus("✅ Enviando 3 notificações com intervalo de 1 segundo...");
+            } catch (error) {
+                updateStatus("❌ Erro ao enviar notificações: " + error.message, true);
+            }
+        }
+
+        // Verifica o status ao carregar a página
+        window.onload = checkPermission;
+    </script>
+</body>
+</html>

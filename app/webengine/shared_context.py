@@ -25,6 +25,13 @@ class SharedWebContext:
     """
 
     _instance: Optional[WebKit.WebContext] = None
+    _notification_manager = None
+
+    @classmethod
+    def set_notification_manager(cls, notification_manager):
+        """Set the notification manager for handling web notifications."""
+        cls._notification_manager = notification_manager
+        logger.debug("Notification manager set for SharedWebContext")
 
     @classmethod
     def get_instance(cls) -> WebKit.WebContext:
@@ -36,6 +43,13 @@ class SharedWebContext:
         if cls._instance is None:
             logger.info("Creating shared WebContext")
             cls._instance = WebKit.WebContext.new()
+
+            # Enable notification permission requests
+            try:
+                cls._instance.set_web_process_extensions_directory("/tmp")
+            except Exception as e:
+                logger.debug(f"Could not set web process extensions: {e}")
+
             logger.info("WebContext created successfully")
 
         return cls._instance

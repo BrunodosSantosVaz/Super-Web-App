@@ -27,6 +27,7 @@ from ..data.models import WebAppSettings
 from ..utils.logger import Logger, get_logger
 from ..utils.validators import sanitize_filename
 from ..utils.xdg import XDGDirectories
+from .notification_bridge import NotificationBridge
 from .popup_handler import NavigationHandler, PopupHandler
 from .profile_manager import ProfileManager
 from .security_manager import SecurityManager
@@ -50,6 +51,68 @@ class BlobDownloadPayload:
     mime_type: Optional[str] = None
     source_app: Optional[str] = None
 
+
+NOTIFICATION_OVERRIDE_JS = """
+(function() {
+  // Check if webkit message handler is available
+  const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.superNotification;
+
+  if (typeof Notification !== 'undefined') {
+    // Store original
+    const OriginalNotification = Notification;
+
+    // Override permission getter
+    Object.defineProperty(Notification, 'permission', {
+      get: function() {
+        return 'granted';
+      },
+      configurable: false
+    });
+
+    // Override requestPermission to always resolve with 'granted'
+    Notification.requestPermission = function() {
+      return Promise.resolve('granted');
+    };
+
+    // Override Notification constructor to intercept and send to native
+    window.Notification = function(title, options) {
+      // Send to native handler if available
+      if (handler && typeof handler.postMessage === 'function') {
+        try {
+          handler.postMessage({
+            type: 'show-notification',
+            title: title || '',
+            body: (options && options.body) || '',
+            icon: (options && options.icon) || ''
+          });
+        } catch (e) {
+          console.error('[Super WebApp] Failed to send notification to native:', e);
+        }
+      }
+
+      // Create original notification (will be blocked by permission but we don't care)
+      try {
+        return new OriginalNotification(title, options);
+      } catch (e) {
+        // Return a mock object if creation fails
+        return {
+          close: function() {},
+          addEventListener: function() {},
+          removeEventListener: function() {}
+        };
+      }
+    };
+
+    // Copy static properties
+    window.Notification.permission = 'granted';
+    window.Notification.requestPermission = function() {
+      return Promise.resolve('granted');
+    };
+
+    console.log('[Super WebApp] Notification permissions auto-granted and interceptor installed');
+  }
+})();
+"""
 
 BLOB_CAPTURE_JS = """
 (function () {
@@ -227,22 +290,32 @@ class WebViewManager:
         self,
         profile_manager: ProfileManager,
         download_bridge: Optional[SuperDownloadBridge] = None,
+        notification_manager=None,
     ) -> None:
         """Initialize WebView manager.
 
         Args:
             profile_manager: ProfileManager instance for webapp profiles
+            download_bridge: Optional SuperDownloadBridge instance
+            notification_manager: Optional NotificationManager instance
         """
         self.profile_manager = profile_manager
         self._download_bridge = download_bridge or SuperDownloadBridge()
+        self._notification_manager = notification_manager
+        self._notification_bridge = (
+            NotificationBridge(notification_manager) if notification_manager else None
+        )
         self._use_super_download = WeakKeyDictionary()
         self._webview_ids: "WeakKeyDictionary[WebKit.WebView, str]" = WeakKeyDictionary()
+        self._webview_names: "WeakKeyDictionary[WebKit.WebView, str]" = WeakKeyDictionary()
+        self._webview_icons: "WeakKeyDictionary[WebKit.WebView, str]" = WeakKeyDictionary()
+        self._webview_settings: "WeakKeyDictionary[WebKit.WebView, WebAppSettings]" = WeakKeyDictionary()
         self._user_scripts_installed: "WeakKeyDictionary[WebKit.WebView, bool]" = WeakKeyDictionary()
         self._message_handlers: "WeakKeyDictionary[WebKit.WebView, int]" = WeakKeyDictionary()
         logger.debug("WebViewManager initialized")
 
     def create_webview(
-        self, webapp_id: str, settings: WebAppSettings
+        self, webapp_id: str, settings: WebAppSettings, webapp_name: str = None, icon_path: str = None
     ) -> WebKit.WebView:
         """Create and configure a WebView for a webapp.
 
@@ -272,6 +345,17 @@ class WebViewManager:
         self._connect_signals(webview)
         self._use_super_download[webview] = settings.use_super_download
         self._webview_ids[webview] = webapp_id
+        self._webview_names[webview] = webapp_name or "WebApp"
+        self._webview_icons[webview] = icon_path
+        self._webview_settings[webview] = settings
+
+        # Setup notification bridge if available
+        if self._notification_bridge and settings.enable_notif:
+            self._notification_bridge.setup_webview(
+                webview, webapp_id, webapp_name or "WebApp", icon_path
+            )
+            # Install notification permission override script
+            self._install_notification_override(webview, webapp_id)
 
         if settings.use_super_download:
             self._install_blob_capture(webview, webapp_id)
@@ -280,7 +364,8 @@ class WebViewManager:
         return webview
 
     def create_webview_with_popup_handler(
-        self, webapp_id: str, settings: WebAppSettings, popup_handler: PopupHandler
+        self, webapp_id: str, settings: WebAppSettings, popup_handler: PopupHandler,
+        webapp_name: str = None, icon_path: str = None
     ) -> WebKit.WebView:
         """Create WebView with custom popup handler.
 
@@ -288,11 +373,15 @@ class WebViewManager:
             webapp_id: Unique identifier of the webapp
             settings: Settings to apply to the WebView
             popup_handler: PopupHandler instance
+            webapp_name: Optional webapp name for notifications
+            icon_path: Optional path to webapp icon
 
         Returns:
             Configured WebKit.WebView instance
         """
-        webview = self.create_webview(webapp_id, settings)
+        webview = self.create_webview(
+            webapp_id, settings, webapp_name, icon_path
+        )
 
         # Setup popup handling
         if hasattr(popup_handler, "set_download_handler"):
@@ -412,9 +501,28 @@ class WebViewManager:
         Returns:
             True if handled, False otherwise
         """
-        # This will be handled by NotificationManager in the Core layer
-        # For now, deny by default
         logger.info(f"Permission request: {type(request).__name__}")
+
+        # Handle notification permission requests
+        if isinstance(request, WebKit.NotificationPermissionRequest):
+            if self._notification_manager:
+                webapp_id = self._webview_ids.get(webview)
+                settings = self._webview_settings.get(webview)
+
+                if webapp_id and settings:
+                    handled = self._notification_manager.handle_permission_request(
+                        webview, request, webapp_id, settings
+                    )
+                    if handled:
+                        return True
+
+            # If not handled by notification manager, deny by default
+            logger.debug("Notification permission denied (no handler)")
+            request.deny()
+            return True
+
+        # For other permission requests, deny by default
+        logger.debug(f"Permission request denied by default: {type(request).__name__}")
         request.deny()
         return True
 
@@ -458,6 +566,115 @@ class WebViewManager:
         if not uri:
             return False
         return self._forward_download(webview, uri)
+
+    def _install_notification_override(self, webview: WebKit.WebView, webapp_id: str) -> None:
+        """Install JavaScript to override Notification API and auto-grant permissions."""
+        manager = getattr(webview, "get_user_content_manager", lambda: None)()
+        if manager is None:
+            logger.debug("UserContentManager indisponível; override de notificações ignorado.")
+            return
+
+        # Register message handler for notifications
+        try:
+            manager.register_script_message_handler("superNotification")
+            manager.connect(
+                "script-message-received::superNotification",
+                self._on_notification_message,
+                webview,
+                webapp_id,
+            )
+            logger.debug(f"Notification message handler registered for webapp {webapp_id}")
+        except Exception as exc:
+            logger.warning(f"Falha ao registrar handler de notificações: {exc}")
+            return
+
+        try:
+            # Create user script that runs at document start
+            script = WebKit.UserScript.new(
+                NOTIFICATION_OVERRIDE_JS,
+                getattr(WebKit.UserContentInjectedFrames, "ALL_FRAMES", 0),
+                getattr(WebKit.UserScriptInjectionTime, "START", 0),
+                [],
+                []
+            )
+            manager.add_script(script)
+            logger.debug(f"Notification override script installed for webapp {webapp_id}")
+        except Exception as exc:
+            logger.error(
+                f"Falha ao instalar script de override de notificações: {exc}",
+                exc_info=True
+            )
+
+    def _on_notification_message(
+        self,
+        manager: WebKit.UserContentManager,
+        message,
+        webview: WebKit.WebView,
+        webapp_id: str,
+    ) -> None:
+        """Handle notification messages from JavaScript."""
+        try:
+            # Get JS value
+            js_payload_source = message
+            get_js_value = getattr(message, "get_js_value", None)
+            if callable(get_js_value):
+                try:
+                    js_payload_source = get_js_value()
+                except Exception as exc:
+                    logger.error(f"Falha ao obter js_value: {exc}")
+                    js_payload_source = None
+            elif hasattr(message, "get_value"):
+                try:
+                    js_payload_source = message.get_value()
+                except Exception as exc:
+                    logger.error(f"Falha ao obter value: {exc}")
+                    js_payload_source = None
+
+            if js_payload_source is None:
+                logger.error("Mensagem de notificação sem valor legível")
+                return
+
+            # Deserialize
+            try:
+                if hasattr(js_payload_source, "to_json"):
+                    payload_raw = js_payload_source.to_json(0)
+                elif hasattr(js_payload_source, "to_string"):
+                    payload_raw = js_payload_source.to_string()
+                else:
+                    logger.error("Objeto JS não suporta serialização")
+                    return
+                payload = json.loads(payload_raw)
+            except Exception as exc:
+                logger.error(f"Falha ao decodificar mensagem de notificação: {exc}")
+                return
+
+            if not isinstance(payload, dict) or payload.get("type") != "show-notification":
+                logger.debug(f"Mensagem de notificação ignorada: {payload}")
+                return
+
+            # Get notification data
+            title = payload.get("title", "")
+            body = payload.get("body", "")
+
+            # Get webapp info
+            webapp_name = self._webview_names.get(webview, "WebApp")
+            icon_path = self._webview_icons.get(webview)
+
+            logger.info(f"Notification from {webapp_name}: {title}")
+
+            # Send via notification manager
+            if self._notification_manager and self._notification_manager.native_handler:
+                self._notification_manager.native_handler.send_notification(
+                    webapp_name=webapp_name,
+                    title=title,
+                    body=body,
+                    icon_path=icon_path
+                )
+            else:
+                logger.warning("NotificationManager não disponível")
+
+        except Exception as exc:
+            logger.error(f"Erro ao processar mensagem de notificação: {exc}", exc_info=True)
 
     def _install_blob_capture(self, webview: WebKit.WebView, webapp_id: str) -> None:
         manager = getattr(webview, "get_user_content_manager", lambda: None)()

@@ -20,6 +20,7 @@ gi.require_version("WebKit", "6.0")
 from gi.repository import Adw, Gtk, GLib
 
 from .data.database import Database
+from .core.notification_manager import NotificationManager
 from .core.webapp_manager import WebAppManager
 from .ui.webapp_window import WebAppWindow
 from .utils.logger import Logger, get_logger
@@ -46,6 +47,7 @@ class StandaloneWebAppApplication(Adw.Application):
         self.database = None
         self.webapp_manager = None
         self.profile_manager = None
+        self.notification_manager = None
         self.webapp_window = None
 
         logger.info(f"StandaloneWebAppApplication initialized for {webapp_id} (ID: {unique_app_id})")
@@ -64,8 +66,13 @@ class StandaloneWebAppApplication(Adw.Application):
         # Initialize profile manager
         self.profile_manager = ProfileManager()
 
+        # Initialize notification manager
+        self.notification_manager = NotificationManager(self.profile_manager)
+
         # Initialize webapp manager
-        self.webapp_manager = WebAppManager(self.database, self.profile_manager)
+        self.webapp_manager = WebAppManager(
+            self.database, self.profile_manager, self.notification_manager
+        )
 
         logger.debug("Standalone webapp components initialized")
 
@@ -96,6 +103,7 @@ class StandaloneWebAppApplication(Adw.Application):
             settings=settings,
             webapp_manager=self.webapp_manager,
             profile_manager=self.profile_manager,
+            notification_manager=self.notification_manager,
             on_window_closed=self._on_window_closed,
         )
 

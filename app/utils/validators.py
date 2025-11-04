@@ -59,6 +59,15 @@ def validate_url(url: str) -> Tuple[bool, str]:
 
     url = url.strip()
 
+    # Allow file:// URLs for local testing
+    if url.startswith("file://"):
+        try:
+            parsed = urlparse(url)
+            if parsed.scheme == "file" and parsed.path:
+                return True, url
+        except Exception:
+            return False, url
+
     # Add https:// if no scheme provided
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"

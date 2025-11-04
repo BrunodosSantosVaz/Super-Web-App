@@ -37,6 +37,7 @@ class WebAppWindow(Adw.ApplicationWindow):
         settings: WebAppSettings,
         webapp_manager: WebAppManager,
         profile_manager: ProfileManager,
+        notification_manager=None,
         on_window_closed: Optional[Callable[[str], None]] = None,
         **kwargs
     ) -> None:
@@ -48,6 +49,7 @@ class WebAppWindow(Adw.ApplicationWindow):
             settings: WebApp settings
             webapp_manager: WebAppManager instance
             profile_manager: ProfileManager instance
+            notification_manager: Optional NotificationManager instance
             **kwargs: Additional arguments
         """
         super().__init__(application=application, **kwargs)
@@ -56,6 +58,7 @@ class WebAppWindow(Adw.ApplicationWindow):
         self.settings = settings
         self.webapp_manager = webapp_manager
         self.profile_manager = profile_manager
+        self.notification_manager = notification_manager
         self._on_window_closed = on_window_closed
         self.tray_indicator: Optional[TrayIndicator] = None
         self._force_close = False
@@ -216,7 +219,10 @@ class WebAppWindow(Adw.ApplicationWindow):
     def _load_webapp(self) -> None:
         """Load the webapp URL in WebView."""
         # Create WebView manager
-        webview_manager = WebViewManager(self.profile_manager)
+        webview_manager = WebViewManager(
+            self.profile_manager,
+            notification_manager=self.notification_manager
+        )
 
         if self.settings.allow_tabs:
             # Setup popup handler for tabs
@@ -258,9 +264,17 @@ class WebAppWindow(Adw.ApplicationWindow):
             )
 
             # Create single WebView
-            webview = webview_manager.create_webview_with_popup_handler(
-                self.webapp.id, self.settings, popup_handler
+            # Note: create_webview_with_popup_handler calls create_webview internally
+            # We need to ensure it passes webapp_name and icon_path
+            webview = webview_manager.create_webview(
+                webapp_id=self.webapp.id,
+                settings=self.settings,
+                webapp_name=self.webapp.name,
+                icon_path=self.webapp.icon_path
             )
+
+            # Setup popup handling
+            popup_handler.setup_webview(webview)
 
             # Connect navigation signals
             webview.connect("notify::uri", self._on_uri_changed)

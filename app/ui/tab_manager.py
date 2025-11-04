@@ -114,7 +114,11 @@ class TabManager:
 
         # Create new WebView
         webview = self.webview_manager.create_webview_with_popup_handler(
-            self.webapp.id, self.settings, self.popup_handler
+            webapp_id=self.webapp.id,
+            settings=self.settings,
+            popup_handler=self.popup_handler,
+            webapp_name=self.webapp.name,
+            icon_path=self.webapp.icon_path
         )
 
         # Connect WebView signals

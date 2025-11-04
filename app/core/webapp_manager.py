@@ -31,15 +31,22 @@ class WebAppManager:
     - Validation
     """
 
-    def __init__(self, database: Database, profile_manager: ProfileManager) -> None:
+    def __init__(
+        self,
+        database: Database,
+        profile_manager: ProfileManager,
+        notification_manager=None
+    ) -> None:
         """Initialize webapp manager.
 
         Args:
             database: Database instance for persistence
             profile_manager: ProfileManager for webkit profiles
+            notification_manager: Optional NotificationManager for notifications
         """
         self.db = database
         self.profile_manager = profile_manager
+        self.notification_manager = notification_manager
         logger.info("WebAppManager initialized")
 
     def create_webapp(
@@ -89,6 +96,10 @@ class WebAppManager:
 
         # Create profile directory
         XDGDirectories.get_profile_dir(webapp_id)
+
+        # Ensure notification permission if enabled
+        if self.notification_manager and settings.enable_notif:
+            self.notification_manager.ensure_permission_if_enabled(webapp_id, settings)
 
         logger.info(f"WebApp created successfully: {webapp_id}")
         return webapp, settings
@@ -227,6 +238,12 @@ class WebAppManager:
         """
         logger.debug(f"Updating settings for webapp: {settings.webapp_id}")
         self.db.update_webapp_settings(settings)
+
+        # Ensure notification permission is set if enabled
+        if self.notification_manager:
+            self.notification_manager.ensure_permission_if_enabled(
+                settings.webapp_id, settings
+            )
 
     def close_running_webapp(self, webapp_id: str) -> bool:
         """Attempt to close a running standalone webapp via its PID file."""

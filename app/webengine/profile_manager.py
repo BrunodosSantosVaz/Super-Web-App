@@ -75,10 +75,20 @@ class ProfileManager:
         cache_dir = profile_dir / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
 
+        # Use ephemeral=False to persist data
         session = WebKit.NetworkSession.new(
             data_directory=str(profile_dir),
             cache_directory=str(cache_dir),
         )
+
+        # Configure website data manager to persist permissions
+        website_data_manager = session.get_website_data_manager()
+        if website_data_manager:
+            # Set base directories for persistent storage
+            _safe_call(website_data_manager, "set_base_data_directory", str(profile_dir))
+            _safe_call(website_data_manager, "set_base_cache_directory", str(cache_dir))
+            logger.debug(f"WebsiteDataManager configured for {webapp_id}")
+
         self._sessions[webapp_id] = session
         logger.debug(f"NetworkSession created for {webapp_id} at {profile_dir}")
         return session

@@ -2,9 +2,21 @@
 
 Plataforma desktop para criar e administrar WebApps modernos no Linux com foco em isolamento, integração nativa e produtividade. Construído em **Python 3.11+**, **GTK 4/libadwaita** e **WebKitGTK 6**, o Super WebApp combina técnicas de navegadores modernos com fluxo de trabalho de aplicativos desktop independentes.
 
+## 💡 Sobre o Projeto
+
+Este projeto foi desenvolvido por um profissional de produto, não por um programador experiente. Minha pouca experiência com codigo inclui trabalhos com Python para análise de dados e desenvolvimento web com HTML, CSS, JavaScript e PHP. No entanto, este projeto foi construído com o apoio intensivo de inteligência artificial (Claude Code e OpenAI Codex), através de um processo iterativo de pesquisa, experimentação e aprendizado.
+
+Como minha area é **Produtos**, minha força está em visualizar funcionalidades, entender necessidades dos usuários e projetar experiências. A qualidade técnica do código pode não refletir as melhores práticas de engenharia de software em todos os aspectos, e reconheço que há espaço para melhorias arquiteturais e de performance.
+
+**Convido a comunidade** a abraçar a ideia deste sistema e contribuir com melhorias! Se você é um desenvolvedor experiente e vê potencial no projeto, sua colaboração será muito bem-vinda. Juntos, podemos transformar esta ferramenta em algo ainda mais robusto e profissional.
+
+> 🤝 **Contribuições são extremamente bem-vindas!** Seja para refatoração, otimização, correção de bugs ou novas funcionalidades. Vamos construir algo incrível juntos!
+
 ## Índice
+- [💡 Sobre o Projeto](#-sobre-o-projeto)
 - [Motivação](#motivação)
 - [Principais recursos](#principais-recursos)
+  - [🔔 Sistema de Notificações](#-sistema-de-notificações)
 - [Tecnologias e arquitetura](#tecnologias-e-arquitetura)
 - [Compatibilidade de licenças](#compatibilidade-de-licenças)
 - [Requisitos](#requisitos)
@@ -17,6 +29,7 @@ Plataforma desktop para criar e administrar WebApps modernos no Linux com foco e
   - [Bandeja do sistema](#bandeja-do-sistema)
   - [Linha de comando](#linha-de-comando)
   - [Integração com Super Download](#integração-com-super-download)
+  - [Configurando notificações](#configurando-notificações)
 - [Configuração e armazenamento](#configuração-e-armazenamento)
 - [Desenvolvimento](#desenvolvimento)
 - [Roadmap](#roadmap)
@@ -37,12 +50,49 @@ Inspirado por elementos de cada um, reuni o que era essencial no meu dia a dia: 
 - **Catálogo central de WebApps** com criação, edição e exclusão via interface libadwaita.
 - **Abas dinâmicas** com integração à barra de título, limite configurável e títulos em tempo real.
 - **Perfis isolados por WebApp** (cookies, armazenamento e permissões em diretórios dedicados).
+- **🔔 Notificações nativas automáticas** - Permissões concedidas automaticamente quando habilitadas, com integração total ao sistema de notificações do Linux (KDE, GNOME, XFCE, etc).
 - **Minimização e restauração via bandeja** usando StatusNotifierItem/DBus, com menu para abrir ou encerrar rapidamente.
 - **Instalador desktop automático**: gera arquivos `.desktop`, ícones e scripts de lançamento.
 - **Download helpers**: opção por WebApp para encaminhar downloads ao Super Download ou salvar localmente.
 - **Suporte multilíngue (pt-BR/en)** com preferências persistentes.
 - **Logs, banco SQLite, diretórios XDG** e perfis WebKit tratados automaticamente.
 - **CLI integrada** para lançar WebApps específicos, abrir preferências e fechar instâncias em execução.
+
+### 🔔 Sistema de Notificações
+
+O Super WebApp implementa um **sistema de notificações totalmente automático** que integra perfeitamente aplicações web com o sistema de notificações do Linux:
+
+#### Como Funciona
+
+1. **Permissão Automática**: Ao marcar a opção **"Permitir notificações"** nas configurações do WebApp, as permissões são concedidas **automaticamente e permanentemente** - sem popups ou prompts adicionais.
+
+2. **Interceptação Inteligente**: Um script JavaScript é injetado que:
+   - Sobrescreve a API `Notification` do navegador
+   - Força `Notification.permission` para sempre retornar `"granted"`
+   - Intercepta todas as tentativas de criar notificações
+   - Envia os dados para o sistema nativo via WebKit message handlers
+
+3. **Integração Nativa**: As notificações aparecem diretamente no centro de notificações do seu desktop Linux usando `notify-send`:
+   - **Compatível** com KDE Plasma, GNOME, XFCE, Cinnamon, MATE e outros
+   - **Persistentes** entre reinicializações
+   - **Identificadas** com o nome "Super WebApp" e o nome do webapp
+   - **Com ícone** do webapp quando disponível
+
+#### Casos de Uso
+
+Perfeito para aplicações como:
+- **WhatsApp Web** - Receba notificações de mensagens automaticamente
+- **Gmail / Outlook** - Notificações de novos emails
+- **Discord / Slack** - Mensagens e menções
+- **Telegram Web** - Mensagens instantâneas
+- **Google Calendar** - Lembretes de eventos
+
+#### Comportamento
+
+- **Com notificações ATIVADAS**: Permissão concedida automaticamente, notificações aparecem no sistema
+- **Com notificações DESATIVADAS**: Permissões negadas, nenhuma notificação é exibida
+- **Persistência**: A configuração é salva em `~/.local/share/br.com.infinity.webapps/profiles/{webapp-id}/permissions.json`
+- **Reinicialização**: Funciona imediatamente após reiniciar o webapp ou o sistema
 
 ## Tecnologias e arquitetura
 
@@ -154,19 +204,75 @@ As ações são roteadas para a instância existente (Gio.Application `HANDLES_C
 
 ### Integração com Super Download
 
-A aba “Downloads” nas preferências de cada WebApp permite selecionar:
+A aba "Downloads" nas preferências de cada WebApp permite selecionar:
 - **Manter no WebApp** (WebKit padrão),
 - **Abrir automaticamente** (para arquivos suportados),
-- **Encaminhar ao Super Download** (executa `super-download` com a URL e metadados).  
+- **Encaminhar ao Super Download** (executa `super-download` com a URL e metadados).
 Também é possível definir o comando customizado via variável `SUPER_DOWNLOAD_COMMAND`.
+
+### Configurando notificações
+
+Para habilitar notificações em um WebApp:
+
+1. **Ao criar novo WebApp**:
+   - Marque a caixa ✅ **"Permitir notificações"**
+   - Pronto! As notificações funcionarão automaticamente
+
+2. **Em WebApp existente**:
+   - Clique com botão direito no WebApp → **"Editar"**
+   - Marque ✅ **"Permitir notificações"**
+   - Salve as alterações
+   - **Importante**: Feche e reabra o WebApp para aplicar
+
+3. **Testando**:
+   - Abra o WebApp (ex: WhatsApp Web)
+   - A permissão já estará concedida automaticamente
+   - Peça para alguém te enviar uma mensagem
+   - A notificação aparecerá no seu desktop! 🔔
+
+#### Requisitos do Sistema
+
+- **notify-send** deve estar instalado (geralmente já vem por padrão)
+- Ambiente desktop com suporte a notificações D-Bus (KDE, GNOME, XFCE, etc)
+
+Verifique se está instalado:
+```bash
+which notify-send
+# Deve retornar: /usr/bin/notify-send ou /usr/sbin/notify-send
+```
+
+Teste manualmente:
+```bash
+notify-send "Teste" "Testando notificação"
+```
 
 ## Configuração e armazenamento
 
-- Configurações globais: `~/.config/br.com.infinity.webapps/config.json`
-- Banco de dados (SQLite): `~/.local/share/br.com.infinity.webapps/webapps.db`
-- Perfis WebKit: `~/.local/share/br.com.infinity.webapps/webapps/<id>`
-- Logs: `~/.local/state/br.com.infinity.webapps/log.txt`
-- Arquivos `.desktop` e ícones: instalados em `~/.local/share/applications` e `~/.local/share/icons/hicolor/*/apps`
+- **Configurações globais**: `~/.config/br.com.infinity.webapps/config.json`
+- **Banco de dados (SQLite)**: `~/.config/br.com.infinity.webapps/webapps.db`
+- **Perfis WebKit**: `~/.local/share/br.com.infinity.webapps/profiles/<webapp-id>/`
+  - Cookies, LocalStorage, IndexedDB
+  - Cache HTTP em `profiles/<webapp-id>/cache/`
+  - **Permissões** em `profiles/<webapp-id>/permissions.json`
+- **Ícones dos WebApps**: `~/.local/share/br.com.infinity.webapps/icons/`
+- **Logs**: `~/.local/state/br.com.infinity.webapps/log.txt`
+- **Arquivos `.desktop`**: `~/.local/share/applications/br.com.infinity.webapps.webapp_*.desktop`
+- **Ícones no sistema**: `~/.local/share/icons/hicolor/*/apps/br.com.infinity.webapps.webapp_*.png`
+
+### Estrutura de Permissões
+
+Cada WebApp possui um arquivo `permissions.json` que armazena decisões de permissão:
+
+```json
+{
+  "notifications": true,
+  "geolocation": false,
+  "camera": false,
+  "microphone": false
+}
+```
+
+Este arquivo é **persistente** e mantém as configurações mesmo após reinicializações.
 
 ## Desenvolvimento
 
@@ -183,11 +289,42 @@ O diretório `tests/` contém cenários iniciais para garantir que a infraestrut
 ## Roadmap
 
 Itens planejados nas próximas versões (vide `plano.txt`):
+- ✅ **Sistema de notificações nativas** (implementado!)
 - Restauração de abas entre sessões e atalhos avançados (Ctrl+T/Ctrl+W/Ctrl+Tab).
 - Suporte a gestos, user-scripts e temas personalizados.
 - API D-Bus para controle externo e modo quiosque.
 - Sincronização de catálogo e perfis entre máquinas.
 - Monitoramento de downloads com feedback direto na UI.
+- Gerenciamento de outras permissões web (câmera, microfone, geolocalização).
+
+## Contribuindo
+
+Este projeto foi criado com paixão e com a ajuda de IA, mas há muito espaço para melhorias! Se você é desenvolvedor e quer contribuir:
+
+### Como Contribuir
+
+1. **Fork** o projeto
+2. Crie uma **branch** para sua feature (`git checkout -b feature/MinhaFeature`)
+3. **Commit** suas mudanças (`git commit -m 'Adiciona MinhaFeature'`)
+4. **Push** para a branch (`git push origin feature/MinhaFeature`)
+5. Abra um **Pull Request**
+
+### Áreas que Precisam de Ajuda
+
+- 🏗️ **Refatoração arquitetural** - Melhorar organização e padrões de código
+- ⚡ **Performance** - Otimizar uso de memória e processamento
+- 🧪 **Testes** - Expandir cobertura de testes unitários e de integração
+- 📚 **Documentação** - Melhorar docs técnicas e comentários no código
+- 🐛 **Correção de bugs** - Resolver issues abertas
+- ✨ **Novas features** - Implementar itens do roadmap
+
+### Código de Conduta
+
+- Seja respeitoso e construtivo
+- Critique código, não pessoas
+- Ajude a construir uma comunidade acolhedora
+
+Toda contribuição, por menor que seja, é valorizada! 💙
 
 ## Licença
 

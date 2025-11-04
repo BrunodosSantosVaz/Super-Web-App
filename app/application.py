@@ -16,6 +16,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk
 
 from .core.desktop_integration import DesktopIntegration
+from .core.notification_manager import NotificationManager
 from .core.webapp_manager import WebAppManager
 from .data.database import Database
 from .data.models import AppSettings
@@ -58,6 +59,7 @@ class WebAppsApplication(Adw.Application):
         # Core components (initialized in do_startup)
         self.database: Optional[Database] = None
         self.profile_manager: Optional[ProfileManager] = None
+        self.notification_manager: Optional[NotificationManager] = None
         self.webapp_manager: Optional[WebAppManager] = None
         self.app_settings: Optional[AppSettings] = None
 
@@ -96,8 +98,14 @@ class WebAppsApplication(Adw.Application):
         self.profile_manager = ProfileManager()
         logger.info("ProfileManager initialized")
 
+        # Initialize notification manager
+        self.notification_manager = NotificationManager(self.profile_manager)
+        logger.info("NotificationManager initialized")
+
         # Initialize webapp manager
-        self.webapp_manager = WebAppManager(self.database, self.profile_manager)
+        self.webapp_manager = WebAppManager(
+            self.database, self.profile_manager, self.notification_manager
+        )
         logger.info("WebAppManager initialized")
         self.app_settings = self.database.get_app_settings()
         selected_language = set_language(self.app_settings.language)
@@ -195,7 +203,8 @@ class WebAppsApplication(Adw.Application):
         if self._suppress_main_window:
             logger.debug("Main window presentation suppressed for CLI launch")
         else:
-            self.main_window.present()
+            if self.main_window:
+                self.main_window.present()
 
         # Reset suppression flag after each activation
         self._suppress_main_window = False
