@@ -1,4 +1,4 @@
-"""Data models for WebApps Manager.
+"""Data models for Super WebApp.
 
 This module defines the domain models using dataclasses for type safety
 and immutability where appropriate.

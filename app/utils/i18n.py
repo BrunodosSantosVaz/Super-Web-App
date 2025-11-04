@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 _DEFAULT_TRANSLATIONS: Dict[str, Dict[str, str]] = {
     "pt": {
-        "app.title": "WebApps Manager",
+        "app.title": "Super WebApp",
         "menu.preferences": "Preferências",
         "menu.about": "Sobre",
         "menu.quit": "Sair",
@@ -85,13 +85,13 @@ _DEFAULT_TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "category.development": "Desenvolvimento",
         "category.finance": "Finanças",
         "category.other": "Outros",
-        "about.title": "WebApps Manager",
+        "about.title": "Super WebApp",
         "about.description": "Transforme sites em aplicativos de desktop com perfis isolados e integração nativa.",
         "about.website": "Site",
         "about.issues": "Relatar problemas",
     },
     "en": {
-        "app.title": "WebApps Manager",
+        "app.title": "Super WebApp",
         "menu.preferences": "Preferences",
         "menu.about": "About",
         "menu.quit": "Quit",
@@ -158,7 +158,7 @@ _DEFAULT_TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "category.development": "Development",
         "category.finance": "Finance",
         "category.other": "Other",
-        "about.title": "WebApps Manager",
+        "about.title": "Super WebApp",
         "about.description": "Turn websites into desktop apps with isolated profiles and native integration.",
         "about.website": "Website",
         "about.issues": "Report issues",

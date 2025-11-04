@@ -1,6 +1,6 @@
-# WebApps Manager
+# Super WebApp
 
-Plataforma desktop para criar e administrar WebApps modernos no Linux com foco em isolamento, integração nativa e produtividade. Construído em **Python 3.11+**, **GTK 4/libadwaita** e **WebKitGTK 6**, o WebApps Manager combina técnicas de navegadores modernos com fluxo de trabalho de aplicativos desktop independentes.
+Plataforma desktop para criar e administrar WebApps modernos no Linux com foco em isolamento, integração nativa e produtividade. Construído em **Python 3.11+**, **GTK 4/libadwaita** e **WebKitGTK 6**, o Super WebApp combina técnicas de navegadores modernos com fluxo de trabalho de aplicativos desktop independentes.
 
 ## Índice
 - [Motivação](#motivação)
@@ -30,7 +30,7 @@ Eu apreciava:
 - a estética e a gestão do **BigLinux Web Apps**;
 - e o comportamento de minimizar para bandeja do **Teams for Linux**.
 
-Inspirado por elementos de cada um, reuni o que era essencial no meu dia a dia: perfis WebKit isolados, interface moderna, atalhos nativos, abas dinâmicas e um mecanismo confiável para rodar em segundo plano — tudo sem depender dos navegadores já instalados no sistema. O WebApps Manager nasceu dessa necessidade específica e evoluiu para uma ferramenta geral pronta para produção.
+Inspirado por elementos de cada um, reuni o que era essencial no meu dia a dia: perfis WebKit isolados, interface moderna, atalhos nativos, abas dinâmicas e um mecanismo confiável para rodar em segundo plano — tudo sem depender dos navegadores já instalados no sistema. O Super WebApp nasceu dessa necessidade específica e evoluiu para uma ferramenta geral pronta para produção.
 
 ## Principais recursos
 
@@ -138,7 +138,7 @@ python -m app.main --debug
 
 O minimizador usa StatusNotifierItem/DBus:
 - Fechar a janela principal oculta a aplicação (continua rodando).
-- O ícone da bandeja permite **Abrir WebApps Manager** ou **Sair**.
+- O ícone da bandeja permite **Abrir Super WebApp** ou **Sair**.
 - Disponível nativamente em Plasma, XFCE, Cinnamon, MATE; no GNOME requer extensão *AppIndicator and KStatusNotifierItem Support*.
 
 ### Linha de comando

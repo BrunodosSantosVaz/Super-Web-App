@@ -1,4 +1,4 @@
-"""Database layer for WebApps Manager.
+"""Database layer for Super WebApp.
 
 This module provides a clean interface to SQLite database operations,
 following the Repository pattern for separation of concerns.

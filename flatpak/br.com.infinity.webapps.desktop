@@ -1,8 +1,8 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=WebApps Manager
-GenericName=WebApp Manager
+Name=Super WebApp
+GenericName=Gerenciador de WebApps
 Comment=Transform websites into native desktop applications
 Exec=webapps-manager
 Icon=br.com.infinity.webapps

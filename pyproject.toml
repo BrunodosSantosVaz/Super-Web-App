@@ -1,7 +1,7 @@
 [project]
 name = "webapps-manager"
 version = "1.0.0"
-description = "Modern WebApps Manager for Linux with isolated profiles and native desktop integration"
+description = "Modern Super WebApp for Linux with isolated profiles and native desktop integration"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "GPL-3.0-or-later"}

@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>br.com.infinity.webapps</id>
 
-  <name>WebApps Manager</name>
+  <name>Super WebApp</name>
   <summary>Transform websites into native desktop applications</summary>
 
   <metadata_license>CC0-1.0</metadata_license>
@@ -10,7 +10,7 @@
 
   <description>
     <p>
-      WebApps Manager allows you to run your favorite websites as standalone
+      Super WebApp allows you to run your favorite websites as standalone
       desktop applications with full desktop integration. Each webapp runs in
       its own isolated profile, ensuring privacy and security.
     </p>

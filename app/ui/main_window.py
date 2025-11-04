@@ -1,4 +1,4 @@
-"""Main window for WebApps Manager.
+"""Main window for Super WebApp.
 
 This module provides the main window UI for managing webapps,
 including the list view, search, and management actions.

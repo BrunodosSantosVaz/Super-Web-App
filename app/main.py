@@ -1,4 +1,4 @@
-"""Entry point for WebApps Manager application.
+"""Entry point for Super WebApp application.
 
 This module provides the main() function that initializes and runs
 the GTK application.
@@ -34,7 +34,7 @@ def main() -> int:
             sys.argv.remove("--debug")
             logger.info("Debug mode enabled")
 
-        logger.info("Starting WebApps Manager...")
+        logger.info("Starting Super WebApp...")
 
         # Ensure a graphical session is available before registering the app
         init_result = Gtk.init_check()

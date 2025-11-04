@@ -1,4 +1,4 @@
-"""Logging system for WebApps Manager.
+"""Logging system for Super WebApp.
 
 This module provides a structured logging system with file rotation
 and different log levels for development and production.
